@@ -1,11 +1,4 @@
-swaks --to edwin@example.com \
-  --server 127.0.0.1:25 \
-  --data "Subject: Hello\n\nFeatherMSA test email."
+swaks --to edwin@example.com --server 127.0.0.1:25 --data "Subject: Hello\n\nFeatherMSA test email."
 
 
-swaks --to user@localhost.com \  
-  --server 127.0.0.1:587 \
-  --auth \                                         
-  --auth-user edwin@gmail.com \
-  --auth-password 123456 \
-  --data "Subject: Hello\n\nFeatherMSA test email."
+swaks --to user@localhost.com   --server 127.0.0.1:587  --auth  --auth-user edwin@gmail.com --auth-password 123456 --data "Subject: Hello\n\nFeatherMSA test email."

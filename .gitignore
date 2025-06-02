@@ -18,3 +18,9 @@ erl_crash.dump
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Ignore private keys and certificates.
+/priv
+
+# Ignore the mix.lock file.
+mix.lock

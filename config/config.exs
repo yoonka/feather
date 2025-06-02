@@ -17,41 +17,48 @@ import Config
 #       metadata: [:user_id]
 #
 
+config :feather, :smtp_server,
+  name: "Feather MSA Server",
+  address: {0, 0, 0, 0},
+  port: 587,
+  protocol: :tcp,
+  domain: "localhost",
+  sessionoptions: [
+    tls: :always,
+    tls_options: [
+      certfile: "priv/cert.pem",
+      keyfile: "priv/key.pem",
+      verify: :verify_none
+    ]
+  ],
+  pipeline: [
+    {FeatherAdapters.Smtp.Auth.SimpleAuth, users: %{"edwin@gmail.com" => "123456"}},
+    {FeatherAdapters.Smtp.Routing.ByDomain,
+     routes: %{
+       "localhost.com" =>
+         {FeatherAdapters.Smtp.Delivery.SimpleLocalDelivery, path: "./tmp/feather_mail"},
+       :default => {FeatherAdapters.Smtp.Delivery.SimpleRemoteDelivery, []}
+     }}
+  ]
+
 # config :feather, :smtp_server,
-#   name: "Feather MSA Server",
+#   name: "Feather MTA Server",
 #   address: {0, 0, 0, 0},
-#   port: 587,
+#   port: 25,
 #   protocol: :tcp,
 #   domain: "localhost",
 #   sessionoptions: [],
 #   pipeline: [
-#     {FeatherAdapters.Smtp.Auth.SimpleAuth, users: %{"edwin@gmail.com" => "123456"}},
+#     {FeatherAdapters.Smtp.Access.SimpleAccess,
+#      allowed: [
+#        ~r/@example\.com$/,
+#        ~r/^admin@/
+#      ]},
+
 #     {FeatherAdapters.Smtp.Routing.ByDomain,
 #      routes: %{
-#        "localhost.com" =>
+#        "example.com" =>
 #          {FeatherAdapters.Smtp.Delivery.SimpleLocalDelivery, path: "./tmp/feather_mail"},
-#        :default => {FeatherAdapters.Smtp.Delivery.SimpleRemoteDelivery, []}
+#        :default => {FeatherAdapters.Smtp.Delivery.SimpleRejectDelivery, []}
 #      }}
 #   ]
-
-config :feather, :smtp_server,
-  name: "Feather MTA Server",
-  address: {0, 0, 0, 0},
-  port: 25,
-  protocol: :tcp,
-  domain: "localhost",
-  sessionoptions: [],
-  pipeline: [
-    {FeatherAdapters.Smtp.Access.SimpleAccess,
-     allowed: [
-       ~r/@example\.com$/,
-       ~r/^admin@/
-     ]},
-
-    {FeatherAdapters.Smtp.Routing.ByDomain,
-     routes: %{
-       "example.com" =>
-         {FeatherAdapters.Smtp.Delivery.SimpleLocalDelivery, path: "./tmp/feather_mail"},
-       :default => {FeatherAdapters.Smtp.Delivery.SimpleRejectDelivery, []}
-     }}
-  ]

@@ -2,28 +2,49 @@ defmodule Feather.Smtp.Session do
   @behaviour :gen_smtp_server_session
 
   @impl true
-  def init(hostname, session_count, ip, _opts) do
+  def init(hostname, session_count, ip, opts) do
     name = Application.get_env(:feather, :smtp_server)[:name]
     banner = ["#{hostname} #{name} ready #{session_count}"]
+    options = Application.get_env(:feather, :smtp_server)[:sessionoptions]
 
     pipeline =
       Application.get_env(:feather, :smtp_server)[:pipeline]
       |> Enum.map(fn {mod, adapter_opts} ->
-        {mod, mod.init_session(adapter_opts)}
+        merged_opts = Keyword.merge(adapter_opts, opts)
+        {mod, mod.init_session(merged_opts)}
       end)
 
     state = %{
       hostname: hostname,
       pipeline: pipeline,
-      meta: %{ip: ip}
+      meta: %{ip: ip},
+      opts: options
     }
 
     {:ok, banner, state}
   end
 
+  def handle_EHLO(domain, extensions, {:ok, state}) do
+    handle_EHLO(domain, extensions, state)
+  end
+
   @impl true
   def handle_EHLO(_domain, extensions, state) do
-    {:ok, [{~c"AUTH", ~c"PLAIN LOGIN"} | extensions], state}
+    tls? = state.opts[:tls] in [:always, :if_available]
+
+    auth_extensions =
+      [
+        {~c"AUTH", ~c"PLAIN LOGIN"}
+      ] ++ extensions
+
+    new_extensions =
+      if tls? do
+        [
+          {~c"STARTTLS", true}
+        ] ++ auth_extensions
+      end
+
+    {:ok, new_extensions, state}
   end
 
   @impl true
@@ -87,6 +108,10 @@ defmodule Feather.Smtp.Session do
       end
     end)
 
+    {:ok, reason, nil}
+  end
+
+  def terminate(reason, state) do
     {:ok, reason, nil}
   end
 
