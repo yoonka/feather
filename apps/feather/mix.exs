@@ -26,7 +26,7 @@ defmodule Feather.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:gen_smtp, "~> 1.2.0"},
+      {:gen_smtp, "~> 1.3.0"},
       {:adapters, in_umbrella: true}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"},

@@ -1,21 +1,24 @@
 defmodule Feather.Smtp.FeatherMailServer do
-require Logger
-alias Feather.Smtp.Session
+  require Logger
 
   def start do
-    options =  Application.get_env(:feather, :smtp_server)
+    options = Application.get_env(:feather, :smtp_server)
 
     name = options[:name]
     port = options[:port]
     address = options[:address]
-    case :gen_smtp_server.start(Session, options) do
-      {:ok, _pid} ->
-        Logger.info("#{name} started on #{address |> format_address }:#{port}")
-        :ok
-      {error, reason} ->
-        Logger.error("#{name} failed to start on #{address |> format_address}:#{port} with #{inspect(reason)}")
-        {:error, error, reason}
 
+    case :gen_smtp_server.start(name |> String.to_atom(), Feather.Smtp.Session, options) do
+      {:ok, _pid} ->
+        Logger.info("#{name} started on #{address |> format_address}:#{port}")
+        :ok
+
+      {error, reason} ->
+        Logger.error(
+          "#{name} failed to start on #{address |> format_address}:#{port} with #{inspect(reason)}"
+        )
+
+        {:error, error, reason}
     end
   end
 
