@@ -32,7 +32,9 @@ config :feather, :smtp_server,
     ]
   ],
   pipeline: [
-    {FeatherAdapters.Smtp.Auth.SimpleAuth, users: %{"edwin@gmail.com" => "123456"}},
+    {FeatherAdapters.Smtp.Auth.EncryptedProvisionedPassword,
+     keystore_path: System.get_env("FEATHER_KEYSTORE_PATH"),
+     secret_key: System.get_env("FEATHER_SECRET_KEY")},
     {FeatherAdapters.Smtp.Routing.ByDomain,
      routes: %{
        "localhost.com" =>
