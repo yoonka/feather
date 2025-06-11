@@ -32,9 +32,13 @@ config :feather, :smtp_server,
     ]
   ],
   pipeline: [
-    {FeatherAdapters.Smtp.Auth.EncryptedProvisionedPassword,
-     keystore_path: System.get_env("FEATHER_KEYSTORE_PATH"),
-     secret_key: System.get_env("FEATHER_SECRET_KEY")},
+    {
+      FeatherAdapters.Smtp.Auth.PamAuth,
+      binary_path: "./priv/pam_auth"
+    },
+    # {FeatherAdapters.Smtp.Auth.EncryptedProvisionedPassword,
+    #  keystore_path: System.get_env("FEATHER_KEYSTORE_PATH"),
+    #  secret_key: System.get_env("FEATHER_SECRET_KEY")},
     {FeatherAdapters.Smtp.Routing.ByDomain,
      routes: %{
        "localhost.com" =>
