@@ -1,4 +1,10 @@
 swaks --to edwin@example.com --server 127.0.0.1:25 --data "Subject: Hello\n\nFeatherMSA test email."
 
 
-swaks --to user@localhost.com   --server 127.0.0.1:587 --tls --auth  --auth-user edwin --auth-password eyJ0YWciOiJkRDZNNG1SZW1tVWFtZEQ1YUpqTkNBPT0iLCJjaXBoZXJ0ZXh0IjoieUZzcFhMRVp5Rjh5Y2c9PSIsIml2IjoiZ1pKS3g1STU4bEQ2M29QciJ9 --data "Subject: Hello\n\nFeatherMSA test email."
+swaks --to user@localhost.com   --server 127.0.0.1:587 --tls --auth  --auth-user bob --auth-password eyJ0YWciOiI1NnFPK3hQN3owNUY3Z2kxQnIrRlhnPT0iLCJjaXBoZXJ0ZXh0IjoiYXBiUXVHMD0iLCJpdiI6IkVhNDN5MnUxc0hRVTRRY1gifQ= --data "Subject: Hello\n\nFeatherMSA test email."
+
+
+# PAM-AUTH
+
+swaks --to user@localhost.com   --server 127.0.0.1:587 --tls --auth  --auth-user app --auth-password wubbalubba --data "Subject: Hello\n\nFeatherMSA test email."
+
