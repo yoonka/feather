@@ -16,10 +16,6 @@ project:
       ip:
         inherit: false
         address: "10.60.5.2"
-    dependencies:
-      pkg:
-        - name: security/openssl
-          version: "latest"
     copy:
       - from: ".exlector/configs/msa.exs"
         to: "/etc/feather/msa.exs"
@@ -35,11 +31,4 @@ project:
 
     commands:
       - "chmod +x /opt/feather/bin/feather"
-      - |
-        mkdir -p /opt/feather/priv && \
-        openssl req -x509 -newkey rsa:2048 \
-          -keyout /opt/feather/priv/key.pem \
-          -out /opt/feather/priv/cert.pem \
-          -days 365 -nodes \
-          -subj '/C=XX/ST=Feather/L=Mail/O=FeatherMail/CN=msa.maxlabmobile.com'
       - ". /etc/profile && /opt/feather/bin/feather daemon"

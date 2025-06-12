@@ -6,16 +6,38 @@ stages:
 variables:
   ARTIFACT_NAME: feather-main-0
 
+.prepare_merge: &prepare_merge
+  - |
+    if [ "$CI_PIPELINE_SOURCE" == "merge_request_event" ]; then
+      echo "Preparing merge with target branch ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      git config --global user.email "ci@example.com"
+      git config --global user.name "ci-bot"
+      git fetch origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+      if ! git merge --no-commit --no-ff origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME; then
+        echo "Merge conflict detected! Exiting pipeline as merge result would fail."
+        exit 1
+      fi
+      echo "Merge successful, continuing pipeline."
+    else
+      echo "Not a merge request event. Skipping prepare_merge."
+    fi
+
 test_build_artifact:
   stage: build
   tags:
     - freebsd
+
+  before_script:
+    - *prepare_merge
   script:
     - sudo -E exlector artifactory -f .exlector/artifactory.yaml --compress --build_path _build/prod/rel/feather --name $ARTIFACT_NAME
   artifacts:
     paths:
       - $ARTIFACT_NAME.tar.gz
     expire_in: 1 week
+
+  rules:
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(master|develop)/
 
 push_msa_to_sandbox:
   stage: deploy
@@ -29,6 +51,6 @@ push_msa_to_sandbox:
     - echo "Deploying to sandbox..."
     - sudo exlector deploy-jail -f .exlector/deploy_msa.yaml --path $ARTIFACT_NAME.tar.gz
 
-
-
-
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
+      when: manual
