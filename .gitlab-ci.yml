@@ -1,0 +1,34 @@
+stages:
+  - build
+  - release
+  - deploy
+
+variables:
+  ARTIFACT_NAME: feather-main-0
+
+test_build_artifact:
+  stage: build
+  tags:
+    - freebsd
+  script:
+    - sudo -E exlector artifactory -f .exlector/artifactory.yaml --compress --build_path _build/prod/rel/feather --name $ARTIFACT_NAME
+  artifacts:
+    paths:
+      - $ARTIFACT_NAME.tar.gz
+    expire_in: 1 week
+
+push_msa_to_sandbox:
+  stage: deploy
+  needs:
+    - test_build_artifact
+  dependencies:
+    - test_build_artifact
+  tags:
+    - freebsd
+  script:
+    - echo "Deploying to sandbox..."
+    - sudo exlector deploy-jail -f .exlector/deploy_msa.yaml --path $ARTIFACT_NAME.tar.gz
+
+
+
+
