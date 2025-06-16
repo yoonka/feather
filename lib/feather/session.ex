@@ -118,6 +118,8 @@ defmodule Feather.Session do
   @impl true
   def code_change(_old, state, _extra), do: {:ok, state}
 
+
+
   defp step(phase, arg, %{pipeline: pipeline, meta: meta} = state) do
     Enum.reduce_while(pipeline, {[], meta}, fn {mod, adapter_state}, {acc, meta} ->
       if function_exported?(mod, phase, 3) do

@@ -1,11 +1,11 @@
-defmodule FeatherAdapters.Delivery.SimpleRemoteDelivery do
+defmodule FeatherAdapters.Delivery.MXDelivery do
   @moduledoc """
   A delivery adapter that performs remote delivery by looking up MX records for each recipient domain
   and delivering the message via direct SMTP to the appropriate mail exchanger.
 
   ## Example Config
 
-      {FeatherAdapters.Delivery.SimpleRemoteDelivery, domain: "example.com"}
+      {FeatherAdapters.Delivery.MXDelivery, domain: "example.com"}
 
   ## Options
   - `domain`: The domain to use for the HELO command. Defaults to "localhost".
