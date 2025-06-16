@@ -26,7 +26,6 @@ config :feather, :smtp_server,
        ~r/^admin@/,
        ~r/^.+@#{domain}$/
      ]},
-
     {FeatherAdapters.Routing.ByDomain,
      routes: %{
       #  "example.com" =>
@@ -34,12 +33,13 @@ config :feather, :smtp_server,
 
         :default => {
           FeatherAdapters.Delivery.SMTPForward,
+          transformers: [{FeatherAdapters.Transformers.SimpleAliasResolver, aliases: %{
+            "support@localhost" => ["edwin@localhost", "steve@localhost"]
+          }}],
           server: "localhost",
           port: 2525,
           tls_options: [
-            verify: :verify_none,
-
-          ]
+            verify: :verify_none]
         },
       #  :default => {FeatherAdapters.Delivery.SimpleRejectDelivery, []}
      }}

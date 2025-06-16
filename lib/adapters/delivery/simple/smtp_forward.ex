@@ -11,6 +11,7 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
   """
 
   @behaviour FeatherAdapters.Adapter
+  use FeatherAdapters.Transformers.Transformable
   require Logger
 
   @impl true
