@@ -20,12 +20,10 @@ config :feather, :smtp_server,
     ]
   ],
   pipeline: [
-    {FeatherAdapters.Auth.EncryptedProvisionedPassword,
-     keystore_path: System.get_env("FEATHER_KEYSTORE_PATH") || "./keystore.json",
-     secret_key: System.get_env("FEATHER_SECRET_KEY") || :crypto.strong_rand_bytes(50) |> Base.encode64 |> binary_part(0, 50)},
+    {FeatherAdapters.Auth.PamAuth, []},
     {FeatherAdapters.Routing.ByDomain,
      routes: %{
-       :default => {FeatherAdapters.Delivery.SimpleRemoteDelivery, hostname: domain, tls_options: [
+       :default => {FeatherAdapters.Delivery.MXDelivery, hostname: domain, tls_options: [
         versions: [:"tlsv1.2", :"tlsv1.3"],
         verify: :verify_none,
         cacertfile: "/usr/local/share/certs/ca-root-nss.crt"
