@@ -1,6 +1,8 @@
 defmodule FeatherAdapters.Routing.ByDomain do
   @behaviour FeatherAdapters.Adapter
 
+  use FeatherAdapters.Transformers.Transformable
+
   @moduledoc """
   Routes outgoing messages to different delivery adapters based on recipient domain.
 

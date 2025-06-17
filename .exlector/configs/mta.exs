@@ -27,20 +27,22 @@ config :feather, :smtp_server,
        ~r/^.+@#{domain}$/
      ]},
     {FeatherAdapters.Routing.ByDomain,
+    transformers: [{FeatherAdapters.Transformers.SimpleAliasResolver, aliases: %{
+      "support@localhost" => ["edwin@localhost", "steve@localhost","nguthiruedwin@gmail.com"]
+    }}],
      routes: %{
-      #  "example.com" =>
-      #    {FeatherAdapters.Delivery.SimpleLocalDelivery, path: "./tmp/feather_mail"},
-
-        :default => {
-          FeatherAdapters.Delivery.SMTPForward,
-          transformers: [{FeatherAdapters.Transformers.SimpleAliasResolver, aliases: %{
-            "support@localhost" => ["edwin@localhost", "steve@localhost"]
-          }}],
-          server: "localhost",
-          port: 2525,
-          tls_options: [
-            verify: :verify_none]
-        },
+        domain =>
+        {
+          FeatherAdapters.Delivery.LMTPDelivery,
+          host: "localhost",
+          port: 24,
+          ssl: true
+         },
+        :default => {FeatherAdapters.Delivery.MXDelivery, hostname: domain, tls_options: [
+          versions: [:"tlsv1.2", :"tlsv1.3"],
+          verify: :verify_none,
+          cacertfile: "/usr/local/share/certs/ca-root-nss.crt"
+         ]},
       #  :default => {FeatherAdapters.Delivery.SimpleRejectDelivery, []}
      }}
   ]
