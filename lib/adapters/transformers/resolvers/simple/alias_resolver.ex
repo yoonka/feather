@@ -1,4 +1,4 @@
-defmodule FeatherAdapters.Transformers.SimpleAliasResolver do
+defmodule FeatherAdapters.Transformers.Simple.AliasResolver do
 
 
   def transform(%{to: recipients} = meta, opts) do
