@@ -80,7 +80,10 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   """
 
   @behaviour FeatherAdapters.Adapter
+  @recipient_delimiter "+"
+
   require Logger
+  use FeatherAdapters.Transformers.Transformable
 
   @impl true
   def init_session(opts) do
@@ -111,7 +114,9 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
 
   @impl true
   def data(rfc822, %{from: from, to: recipients} = meta, state) do
-    case deliver_lmtp(from, Enum.reverse(recipients), rfc822, state) do
+    mailbox = Map.get(meta, :mailbox, "INBOX")
+
+    case deliver_lmtp(from, Enum.reverse(recipients), rfc822, state, mailbox: mailbox) do
       :ok -> {:ok, meta, state}
       {:error, reason} ->
         Logger.error("LMTP delivery failed: #{inspect(reason)}")
@@ -125,13 +130,17 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   @impl true
   def format_reason(reason), do: inspect(reason)
 
-  defp deliver_lmtp(from, rcpts, raw, state) do
+  defp deliver_lmtp(from, rcpts, raw, state, opts) do
+    mailbox = Keyword.get(opts, :mailbox, "INBOX")
+
+    IO.inspect("Placing on mailbox: #{mailbox}")
+
     with {:ok, socket} <- connect(state),
          :ok <- read_lmtp_ok(socket),
          :ok <- send_cmd(socket, "LHLO feathermail.local"),
          :ok <- send_cmd(socket, "MAIL FROM:<#{from}>"),
          :ok <- Enum.reduce_while(rcpts, :ok, fn rcpt, _acc ->
-           case send_cmd(socket, "RCPT TO:<#{rcpt}>") do
+           case send_cmd(socket, "RCPT TO:<#{rcpt |> rewrite_recipient(mailbox)}>") do
              :ok -> {:cont, :ok}
              {:error, err} -> {:halt, {:error, err}}
            end
@@ -145,6 +154,12 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
     else
       error -> error
     end
+  end
+
+  defp rewrite_recipient(address, mailbox) do
+    [local_part, domain] = String.split(address, "@", parts: 2)
+    rewritten = "#{local_part}#{@recipient_delimiter}#{mailbox}@#{domain}"
+    rewritten
   end
 
   defp connect(%{mode: :unix, path: path}) do

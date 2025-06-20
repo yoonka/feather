@@ -1,4 +1,4 @@
-defmodule FeatherAdapters.Transformers.SimpleAliasResolver do
+defmodule FeatherAdapters.Transformers.Simple.AliasResolver do
 
   @moduledoc """
   A transformer that resolves recipient aliases in the `:to` field of a message.
