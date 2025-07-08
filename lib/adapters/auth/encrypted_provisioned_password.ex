@@ -1,38 +1,90 @@
 defmodule FeatherAdapters.Auth.EncryptedProvisionedPassword do
-  @moduledoc """
-  An authentication adapter for FeatherMail that authenticates users
-  using encrypted password blobs and a Django-style secret key.
+   @moduledoc """
+  An authentication adapter that uses **encrypted provisioning** and a
+  secret key to securely verify user credentials.
 
-  ## How it works
+  This adapter is ideal for systems where you want to:
 
-    - The client is provisioned with an encrypted password blob
-    - The server decrypts the blob using AES-256-GCM
-    - The decrypted password is compared against a bcrypt hash stored in a keystore file
+  - Avoid transmitting plaintext passwords over SMTP
+  - Provision credentials dynamically (e.g., one-time onboarding or shared secrets)
+  - Store password hashes in a secure and inspectable keystore
+
+  ## How It Works
+
+  1. The client is provisioned with an **encrypted password blob**.
+  2. During authentication, the blob is **decrypted on the server** using AES-256-GCM.
+  3. The result is compared against a **bcrypt hash** stored in a keystore file.
 
   ## Configuration
 
-    Adapter options:
-      - `:keystore_path` — path to the keystore JSON file
-      - `:secret_key` — Django-style secret key (50+ char string)
+  Adapter options (passed at init):
 
+    * `:keystore_path` — path to the keystore JSON file (required)
+    * `:secret_key` — Django-style secret key (50+ characters)
+      - Can also be passed via the `FEATHER_SECRET_KEY` environment variable
 
+  Example:
 
+      {FeatherAdapters.Auth.EncryptedProvisionedPassword,
+       keystore_path: "/etc/feather/keystore.json",
+       secret_key: System.fetch_env!("FEATHER_SECRET_KEY")}
 
-  ## Keystore format
+  ## Keystore Format
+
+  The keystore is a JSON file mapping usernames to hashed password data:
 
       {
         "alice@example.com": {
           "hashed_password": "$2b$12$...",
-          "created_at": "2025-06-03T..."
+          "created_at": "2025-06-03T12:34:56Z"
         }
       }
 
-  ## Provisioning
+  ## Provisioning Users
+
+  Use `provision_user/2` to securely create a user and generate their encrypted blob:
 
       FeatherAdapters.Auth.EncryptedProvisionedPassword.provision_user("alice@example.com")
 
-      To provision with a custom password:
-      FeatherAdapters.Auth.EncryptedProvisionedPassword.provision_user("EMAIL", password: "my-password")
+  Or pass a custom password:
+
+      FeatherAdapters.Auth.EncryptedProvisionedPassword.provision_user("alice@example.com",
+        password: "mysupersecret")
+
+  Returns:
+
+      {:ok,
+       %{
+         plaintext: "mysupersecret",
+         encrypted_blob: "<base64-json-aes-gcm-payload>"
+       }}
+
+  You can then send the `encrypted_blob` to the client for use in login.
+
+  ## Example Login Flow
+
+  The client stores or transmits only the encrypted blob. When logging in:
+
+      AUTH alice@example.com <encrypted_blob>
+
+  The server:
+
+  - Decrypts the blob using the secret key
+  - Hashes the result with bcrypt
+  - Compares to the stored hash
+
+  ## Security Notes
+
+  - AES-256-GCM is used for authenticated encryption
+  - Passwords are stored using bcrypt (`Bcrypt.hash_pwd_salt/1`)
+  - The keystore is JSON, human-readable, and auditable
+  - Recommended: rotate the `secret_key` and re-encrypt user blobs periodically
+
+  ## Error Handling
+
+  - If decryption or verification fails, the adapter halts with:
+
+        535 Authentication failed
 
   """
 

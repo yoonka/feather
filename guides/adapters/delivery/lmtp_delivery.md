@@ -8,6 +8,7 @@ LMTP (Local Mail Transfer Protocol) is a simplified variant of SMTP designed for
 - Cyrus IMAP
 - Custom LMTP receivers
 
+- See the [`FeatherAdapters.Delivery.LMTPDelivery`](`FeatherAdapters.Delivery.LMTPDelivery`) module for details.
 ---
 
 ## What it does

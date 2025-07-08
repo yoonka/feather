@@ -4,6 +4,7 @@ The `MXDelivery` adapter delivers email directly to external domains by performi
 
 This adapter allows FeatherMail to function as a full outbound Mail Transfer Agent (MTA), handling direct internet delivery.
 
+- See the [`FeatherAdapters.Delivery.MXDelivery`](`FeatherAdapters.Delivery.MXDelivery`) module for details.
 ---
 
 ## What it does

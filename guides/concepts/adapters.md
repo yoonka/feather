@@ -1,4 +1,4 @@
-# The Adapter System
+# The Adapter System (In-Depth)
 
 The **adapter system** is the core of FeatherMail’s architecture.
 
@@ -142,7 +142,6 @@ FeatherMail provides a growing set of built-in adapters covering:
 - Access Control
 - Filtering
 
-👉 See the full list: [Available Adapters](../adapters/)
 
 You can also create your own adapters to extend FeatherMail's capabilities.
 

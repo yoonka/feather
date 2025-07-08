@@ -8,6 +8,8 @@ This adapter integrates FeatherMail with your system's native user authenticatio
 - Integration with LDAP or other PAM-compatible backends
 - Centralized user management without maintaining a separate email user database
 
+See the [`FeatherAdapters.Auth.PamAuth`](`FeatherAdapters.Auth.PamAuth`) module for details.
+
 ---
 
 ## What it does

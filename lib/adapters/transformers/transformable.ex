@@ -31,7 +31,10 @@ defmodule MyAdapter do
     # At this point, `meta` has already been transformed
     ...
   end
+
+
 end
+```
 """
 
   defmacro __using__(_opts) do

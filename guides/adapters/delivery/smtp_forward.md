@@ -8,6 +8,7 @@ This allows FeatherMail to act as:
 - A filtering proxy in front of an existing SMTP server
 - A transparent forwarder between systems
 
+- See the [`FeatherAdapters.Delivery.SMTPForward`](`FeatherAdapters.Delivery.SMTPForward`) module for details.
 ---
 
 ## What it does

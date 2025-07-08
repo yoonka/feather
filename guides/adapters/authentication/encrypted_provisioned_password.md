@@ -8,6 +8,8 @@ This adapter is useful when you want to:
 - Allow users or devices to hold encrypted credentials.
 - Store actual password hashes securely on the server.
 
+See the [`FeatherAdapters.Auth.EncryptedProvisionedPassword`](`FeatherAdapters.Auth.EncryptedProvisionedPassword`) module for details.
+
 ---
 
 ## What it does

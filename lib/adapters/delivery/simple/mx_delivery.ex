@@ -1,14 +1,76 @@
 defmodule FeatherAdapters.Delivery.MXDelivery do
   @moduledoc """
-  A delivery adapter that performs remote delivery by looking up MX records
-  per domain and delivering once per domain using direct SMTP.
+  A delivery adapter that performs direct remote delivery using MX records.
 
-  Grouped delivery is more efficient than per-recipient sending.
+  `MXDelivery` sends email by performing a DNS MX lookup for each recipient's domain,
+  and then delivering the message directly to that domain’s SMTP server via `:gen_smtp`.
+
+  To optimize performance, recipients are grouped by domain and delivered once per domain.
+
+  ## Use Cases
+
+  - Self-hosted or outbound gateways that want to send mail without an upstream SMTP relay
+  - Avoiding dependency on a third-party SMTP provider
+  - Testing or controlled delivery to known domains
+
+  ## Behavior
+
+  - All recipients are grouped by domain.
+  - Each domain is resolved via DNS to obtain MX records.
+  - The message is then delivered to the highest-priority MX server.
+  - If delivery fails for any domain group, the entire pipeline is halted.
 
   ## Options
-    - `:domain` - HELO domain (default: "localhost")
-    - `:tls_options` - optional TLS configuration
+
+    - `:domain` (optional, default: `"localhost"`) — the domain used in the SMTP HELO/EHLO handshake.
+    - `:tls_options` (optional) — passed to `:gen_smtp_client.send_blocking/2` under `:tls_options`.
+      This can include:
+
+        - `verify: :verify_peer`
+        - `cacerts: :public_key.cacerts_get()`
+        - Any other TLS options accepted by `:ssl.connect/4`
+
+  ## Example
+
+      {FeatherAdapters.Delivery.MXDelivery,
+       domain: "mail.myservice.com",
+       tls_options: [verify: :verify_peer]}
+
+  ## Example Flow
+
+  Given these recipients:
+
+      to: ["alice@gmail.com", "bob@outlook.com", "charlie@gmail.com"]
+
+  The adapter will:
+
+  1. Group them as:
+      - gmail.com: ["alice@gmail.com", "charlie@gmail.com"]
+      - outlook.com: ["bob@outlook.com"]
+
+  2. Perform MX lookup for each domain.
+  3. Deliver once per domain using the top-priority MX host.
+  4. Halt and return a `451 4.4.1` error if any group fails to deliver.
+
+  ## Errors
+
+  If delivery fails for any domain group, the reason is wrapped in:
+
+      {:remote_delivery_failed, reason}
+
+  and translated into a temporary SMTP error.
+
+  Example failure string returned to SMTP client:
+
+      "451 4.4.1 Could not deliver to remote: {:no_mx_records}"
+
+  ## Notes
+
+  - This adapter uses `:gen_smtp_client.send_blocking/2` for direct delivery.
+  - Only the first (highest-priority) MX record is used; fallback logic is not yet implemented.
+  - MX records are resolved via `:inet_res.lookup/3`, and failures are logged.
   """
+
 
   @behaviour FeatherAdapters.Adapter
   require Logger

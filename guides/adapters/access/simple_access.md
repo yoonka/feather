@@ -8,6 +8,7 @@ This adapter is useful when you want to:
 - Limit relaying based on specific domains or user addresses
 - Apply simple filtering logic without maintaining external databases
 
+See the [`FeatherAdapters.Access.SimpleAccess`](`FeatherAdapters.Access.SimpleAccess`) module for details.
 ---
 
 ## What it does

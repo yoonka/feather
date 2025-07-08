@@ -1,16 +1,82 @@
 defmodule FeatherAdapters.Delivery.LMTPDelivery do
   @moduledoc """
-  Delivers email using the LMTP protocol to your MDA.
+  A delivery adapter that sends email using the **LMTP (Local Mail Transfer Protocol)**,
+  commonly used to deliver mail directly to a local MDA (e.g., Dovecot or similar systems).
 
-  Supports both UNIX socket and TCP (optionally with SSL) connections.
+  This adapter supports delivery over both **UNIX sockets** and **TCP**,
+  with optional SSL for secure TCP delivery.
+
+  ## Use Cases
+
+  - Delivering email into **Dovecot** or other LMTP-compatible systems.
+  - Integrating FeatherMail with a local mail store via UNIX sockets.
+  - Secure delivery to a remote LMTP server with SSL.
+
+  ## Behavior
+
+  - Sends commands over LMTP using a simple socket-based client.
+  - Defaults to UNIX socket if `:socket_path` is provided; otherwise falls back to TCP.
+  - Handles TLS via `:ssl.connect/4` when `:ssl` is enabled.
+  - Reads LMTP responses and stops on any error.
 
   ## Options
 
-    - `:socket_path` - path to a UNIX LMTP socket (takes precedence if provided)
-    - `:host` - hostname or IP for TCP (default: "127.0.0.1")
-    - `:port` - LMTP port for TCP (default: 2424)
-    - `:ssl` - whether to use SSL (default: false)
-    - `:ssl_opts` - additional options passed to `:ssl.connect/4`
+    - `:socket_path` — path to a UNIX LMTP socket. **If provided, takes precedence** over host/port.
+    - `:host` — target LMTP host (default: `"127.0.0.1"`).
+    - `:port` — target LMTP port (default: `2424`).
+    - `:ssl` — whether to use SSL/TLS for TCP connections (default: `false`).
+    - `:ssl_opts` — additional options passed to `:ssl.connect/4`.
+      Example:
+        ```elixir
+        [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get()
+        ]
+        ```
+
+  ## Example
+
+  ### UNIX socket (Dovecot)
+
+      {FeatherAdapters.Delivery.LMTPDelivery,
+       socket_path: "/var/run/dovecot/lmtp"}
+
+  ### TCP + SSL
+
+      {FeatherAdapters.Delivery.LMTPDelivery,
+       host: "localhost",
+       port: 2424,
+       ssl: true,
+       ssl_opts: [
+         verify: :verify_none
+       ]}
+
+  ## Protocol
+
+  This adapter issues the following LMTP commands:
+  ```
+    LHLO feathermail.local
+    MAIL FROM:<...>
+    RCPT TO:<...> (repeated for each recipient)
+    DATA
+    (RFC822 body)
+    .
+    QUIT
+  ```
+
+
+  All responses are expected to start with `2xx` or `3xx`. Any other response halts delivery.
+
+  ## Errors
+
+  If delivery fails at any step, the pipeline halts and the reason is logged and returned
+  as `{:halt, :delivery_failed, state}`.
+
+  ## Notes
+
+  - Delivery is synchronous and blocking.
+  - Recipients are processed sequentially within the LMTP session.
+  - The adapter does not yet support per-recipient status codes (though LMTP permits this).
   """
 
   @behaviour FeatherAdapters.Adapter

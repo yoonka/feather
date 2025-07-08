@@ -9,6 +9,7 @@ This adapter allows FeatherMail to:
 - Route external domains to another delivery method (e.g., SMTP forwarding or MX delivery)
 - Cleanly separate routing logic from delivery logic
 
+- See the [`FeatherAdapters.Routing.ByDomain`](`FeatherAdapters.Routing.ByDomain`) module for details.
 ---
 
 ## What it does

@@ -1,15 +1,64 @@
 defmodule FeatherAdapters.Auth.PamAuth do
   @moduledoc """
-  An SMTP adapter that performs PAM-based authentication by invoking an external binary
-  (e.g., a Rust-built `pam_auth`).
+  An authentication adapter that performs **PAM-based login** by invoking an external binary.
 
-  This adapter is useful for PAM based authentication.
+  This is ideal for integrating FeatherMail with system-level accounts via PAM
+  (Pluggable Authentication Modules), commonly used in Linux environments for
+  authenticating against `/etc/passwd`, LDAP, or other backends configured in PAM.
+
+  ## How it Works
+
+  This adapter calls an external program (e.g. a Rust or C executable named `pam_auth`)
+  and passes it the username and password. The binary should perform the actual
+  PAM interaction and return exit code `0` on success.
+
+  ## Expected Binary Behavior
+
+  The binary must:
+
+  - Accept **two arguments**: username and password.
+  - Return **exit code 0** on successful authentication.
+  - Return **non-zero** on failure.
+  - Output any error message (optional) to stdout.
+
+  Example call:
+
+      pam_auth alice mysecretpassword
 
   ## Options
 
-    * `:binary_path` - required path to the `pam_auth` binary
+    * `:binary_path` — (required) absolute or relative path to the `pam_auth` binary.
+      If not provided, the adapter will attempt to locate it in `$PATH`.
 
-  The binary must accept: `pam_auth <username> <password>` and return exit code 0 on success.
+  If the binary cannot be found, an `ArgumentError` is raised during initialization.
+
+  ## Example Configuration
+
+      {FeatherAdapters.Auth.PamAuth,
+       binary_path: "/usr/local/bin/pam_auth"}
+
+  ## Error Handling
+
+  If the PAM authentication fails, the pipeline is halted and the user receives:
+
+      535 Authentication failed: <message from binary>
+
+  ## Security Note
+
+  Ensure that the `pam_auth` binary:
+
+  - Is secure and trusted (preferably written in Rust or C with auditability in mind).
+  - Is not writable by unprivileged users.
+  - Performs proper PAM session handling and safe password checks.
+  - Does **not** log credentials.
+
+  ## Use Case
+
+  This adapter is suited for:
+
+  - SMTP setups requiring local or LDAP-backed login via PAM.
+  - FeatherMail deployments on servers with centralized system user management.
+
   """
 
   @behaviour FeatherAdapters.Adapter

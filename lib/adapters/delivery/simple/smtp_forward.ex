@@ -1,13 +1,57 @@
 defmodule FeatherAdapters.Delivery.SMTPForward do
-  @moduledoc """
-  Forwards incoming messages to another SMTP server.
+ @moduledoc """
+  Forwards incoming messages to an external SMTP server.
+
+  This adapter is useful when FeatherMail is acting as a relay or edge processor
+  and you want to delegate actual mail delivery to another SMTP server.
+
+  It supports TLS, SMTP authentication, and integrates seamlessly with
+  FeatherMail transformers for preprocessing or metadata manipulation.
 
   ## Options
-    - `:server` (required) - target SMTP server
-    - `:port` (default: 25)
-    - `:tls` (:always | :optional | :never) — default: :always
-    - `:tls_options` (optional) - passed directly to :gen_smtp
-    - `:username`, `:password` — for SMTP AUTH
+
+    - `:server` (**required**) — the hostname or IP address of the target SMTP server.
+    - `:port` (optional, default: `25`) — port number to connect to.
+    - `:tls` (optional, default: `:always`) — TLS mode.
+      - `:always` — always use TLS (default).
+      - `:optional` — attempt to upgrade to TLS if the server supports it.
+      - `:never` — disable TLS entirely (not recommended).
+    - `:tls_options` (optional) — a list of options passed to `:gen_smtp`'s TLS configuration.
+      Default includes:
+        - `verify: :verify_peer`
+        - `cacerts: :public_key.cacerts_get()`
+    - `:username` and `:password` (optional) — if set, enables SMTP AUTH using the provided credentials.
+
+  ## Example
+
+      {FeatherAdapters.Delivery.SMTPForward,
+       server: "smtp.mailprovider.com",
+       port: 587,
+       tls: :always,
+       username: "mailer@yourdomain.com",
+       password: System.get_env("SMTP_PASSWORD")}
+
+  ## Transformer Support
+
+  Like all transformable delivery adapters, you can plug in transformers to manipulate the metadata
+  before sending. For example, to resolve aliases before forwarding:
+
+      {FeatherAdapters.Delivery.SMTPForward,
+       server: "smtp.relay.example",
+       transformers: [
+         {FeatherAdapters.Transformers.SimpleAliasResolver,
+          aliases: %{"team@localhost" => ["alice@remote", "bob@remote"]}}
+       ]}
+
+  ## Errors
+
+  If delivery fails, the adapter halts the pipeline and returns a `451 4.4.1` error with the failure reason.
+
+  ## Notes
+
+  - Uses `:gen_smtp_client.send/2` for delivery.
+  - Performs basic deduplication and auth detection (AUTH is `:always` if both `:username` and `:password` are provided).
+
   """
 
   @behaviour FeatherAdapters.Adapter

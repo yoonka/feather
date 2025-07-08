@@ -6,7 +6,8 @@ defmodule FeatherMail.MixProject do
       app: :feather,
       version: "0.1.0",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      docs: &docs/0
     ]
   end
 
@@ -17,11 +18,112 @@ defmodule FeatherMail.MixProject do
     ]
   end
 
+  defp docs do
+    [
+      extras: list_files_recursive("guides/"),
+      groups_for_extras: [
+        "🧭 Guides": [
+          "guides/introduction.md",
+          "guides/quickstart.md",
+          "guides/architecture.md"
+        ],
+        "🧠 Concepts": [
+          "guides/concepts/adapters.md",
+          "guides/concepts/transformers.md"
+        ],
+        "📦 Adapters · Authentication": [
+          "guides/adapters/authentication/encrypted_provisioned_password.md",
+          "guides/adapters/authentication/pam_auth.md",
+          "guides/adapters/authentication/no_auth.md",
+          "guides/adapters/authentication/simple_auth.md"
+        ],
+        "📦 Adapters · Access Control": [
+          "guides/adapters/access/simple_access.md"
+        ],
+        "📦 Adapters · Routing": [
+          "guides/adapters/routing/by_domain.md"
+        ],
+        "📦 Adapters · Delivery": [
+          "guides/adapters/delivery/lmtp_delivery.md",
+          "guides/adapters/delivery/mx_delivery.md",
+          "guides/adapters/delivery/reject_delivery.md",
+          "guides/adapters/delivery/local_delivery.md",
+          "guides/adapters/delivery/smtp_forward.md"
+        ],
+        Tutorials: [
+          "guides/how_to/set_up_msa.md"
+        ]
+      ],
+      groups_for_modules: [
+        "🧠 Core Runtime": [
+          Feather.FeatherMailServer,
+          Feather.FeatherMailSupervisor,
+          Feather.Session
+        ],
+        "🧩 Adapter Behavior": [
+          FeatherAdapters.Adapter
+        ],
+        "🔐 Authentication Adapters": [
+          FeatherAdapters.Auth.EncryptedProvisionedPassword,
+          FeatherAdapters.Auth.NoAuth,
+          FeatherAdapters.Auth.PamAuth,
+          FeatherAdapters.Auth.SimpleAuth
+        ],
+        "🔒 Access Adapters": [
+          FeatherAdapters.Access.SimpleAccess
+        ],
+        "🗺️ Routing Adapters": [
+          FeatherAdapters.Routing.ByDomain
+        ],
+        "📬 Delivery Adapters": [
+          FeatherAdapters.Delivery.ConsolePrintDelivery,
+          FeatherAdapters.Delivery.LMTPDelivery,
+          FeatherAdapters.Delivery.MXDelivery,
+          FeatherAdapters.Delivery.SMTPForward,
+          FeatherAdapters.Delivery.SimpleLocalDelivery,
+          FeatherAdapters.Delivery.SimpleRejectDelivery
+        ],
+        "🪄 Transformers": [
+          FeatherAdapters.Transformers.SimpleAliasResolver,
+          FeatherAdapters.Transformers.Transformable
+        ]
+      ]
+    ]
+  end
+
   defp deps do
     [
       {:jason, "~> 1.4.4"},
       {:bcrypt_elixir, "~> 3.3.0"},
-      {:gen_smtp, "~> 1.3.0"}
+      {:gen_smtp, "~> 1.3.0"},
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true}
     ]
+  end
+
+  def list_files_recursive(path) do
+    list_files_recursive(path, [])
+  end
+
+  defp list_files_recursive(path, acc) do
+    case File.ls(path) do
+      {:ok, entries} ->
+        Enum.reduce(entries, acc, fn entry, acc ->
+          full_path = Path.join(path, entry)
+
+          cond do
+            File.dir?(full_path) ->
+              list_files_recursive(full_path, acc)
+
+            File.regular?(full_path) ->
+              [full_path | acc]
+
+            true ->
+              acc
+          end
+        end)
+
+      {:error, _reason} ->
+        acc
+    end
   end
 end

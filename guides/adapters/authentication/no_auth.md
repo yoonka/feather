@@ -8,6 +8,8 @@ This adapter is useful in **trusted or internal environments** where you:
 - Trust all connections based on network boundaries
 - Want to disable authentication entirely for testing or controlled scenarios
 
+See the [`FeatherAdapters.Auth.NoAuth`](`FeatherAdapters.Auth.NoAuth`) module for details.
+
 ---
 
 ## What it does

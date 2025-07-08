@@ -8,6 +8,7 @@ This adapter is useful when:
 - You need a blackhole sink that always fails delivery.
 - You want to safely test pipelines that involve intentional rejections.
 
+- See the [`FeatherAdapters.Delivery.SimpleRejectDelivery`](`FeatherAdapters.Delivery.SimpleRejectDelivery`) module for details.
 ---
 
 ## What it does

@@ -8,6 +8,8 @@ This adapter is ideal for:
 - Internal systems with very few users
 - Controlled setups where credentials are fully managed ahead of time
 
+See the [`FeatherAdapters.Auth.SimpleAuth`](`FeatherAdapters.Auth.SimpleAuth`) module for details.
+
 ---
 
 ## What it does

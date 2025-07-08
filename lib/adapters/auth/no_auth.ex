@@ -1,23 +1,61 @@
 defmodule FeatherAdapters.Auth.NoAuth do
   @moduledoc """
-  A no-op authentication adapter for trusted/internal environments.
+  An authentication adapter that **disables authentication entirely**.
 
-  This adapter accepts any authentication attempt and marks the session as authenticated.
+  This adapter **accepts all authentication attempts unconditionally** and marks the session
+  as authenticated with a placeholder or configured user. It is intended only for **trusted or internal environments**.
 
-  ## Example config:
+  ## Use Cases
 
-      {FeatherAdapters.Auth.NoAuth, []}
+  - Internal SMTP relays or staging/test pipelines
+  - Air-gapped or VPN-protected environments
+  - Developer/local testing where SMTP AUTH is not needed
+
+  ⚠️ **Do not use in any public-facing or untrusted deployment.**
+
+  ## Behavior
+
+  - Accepts any `{username, password}` tuple in `auth/3`
+  - Injects a fake `:user` into the session metadata
+  - Continues through all other session phases (`helo`, `mail`, `rcpt`, `data`) unchanged
+  - Never halts or fails the pipeline
+
+  ## Options
+
+    * `:user` — (optional) the placeholder identity to associate with the session
+      - Default: `"trusted@localhost"`
+
+  ## Example Configuration
+
+      {FeatherAdapters.Auth.NoAuth}
+
+      # With custom user:
+      {FeatherAdapters.Auth.NoAuth, user: "dev@internal"}
+
+  ## Resulting Metadata
+
+  The authenticated metadata will include:
+
+      %{user: "trusted@localhost"} # or your configured value
+
+  ## Notes
+
+  - This is a **no-op** adapter and provides no actual security.
+  - It is often paired with upstream access controls like firewalls or IP whitelisting.
+  - You can customize the injected user for better observability or routing.
   """
 
   @behaviour FeatherAdapters.Adapter
 
   @impl true
-  def init_session(_opts), do: %{}
+  def init_session(opts), do: %{
+    user: opts[:user] || "trusted@localhost"
+  }
 
   @impl true
   def auth({_username, _password}, meta, state) do
     # Just mark session as authenticated with a fake user.
-    {:ok, Map.put(meta, :user, "trusted@localhost"), state}
+    {:ok, Map.put(meta, :user, state.user), state}
   end
 
   @impl true

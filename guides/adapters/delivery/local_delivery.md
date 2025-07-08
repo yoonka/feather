@@ -9,6 +9,7 @@ This adapter is useful for:
 - Lightweight archival or debugging
 - Small internal deployments that don’t require full mailbox infrastructure
 
+- See the [`FeatherAdapters.Delivery.SimpleLocalDelivery`](`FeatherAdapters.Delivery.SimpleLocalDelivery`) module for details.
 ---
 
 ## What it does

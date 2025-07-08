@@ -1,26 +1,55 @@
 defmodule FeatherAdapters.Access.SimpleAccess do
   @moduledoc """
-  A simple MTA access-control adapter that checks recipient addresses against a list of regex patterns.
+  A simple MTA access-control adapter that filters recipients based on a list of allowed patterns.
 
-  Useful for allowing or denying access to users or domains using pattern-based matching.
+  This adapter provides a lightweight way to **enforce recipient-level access control**
+  using regular expressions. It is especially useful for:
+
+  - Accepting mail only for specific domains or usernames
+  - Blocking external or unintended recipients
+  - Protecting experimental or internal pipelines
+
+  ## Behavior
+
+  - During the `RCPT TO` phase, the adapter checks the recipient address
+    against a list of allowed patterns.
+  - If **any pattern matches**, the recipient is accepted.
+  - If **no patterns match**, the session is halted with a `550` error.
 
   ## Configuration
 
-    * `:allowed` - A list of regex patterns (as strings or compiled regex)
+    * `:allowed` — a list of regular expressions (as strings or compiled `Regex` structs)
 
-  ## Example Config
+  ## Example
 
-      {FeatherAdapters.Access.SimpleAccessDatabase,
+      {FeatherAdapters.Access.SimpleAccess,
        allowed: [
-         ~r/@example\.com$/,
+         ~r/@example\\.com$/,
          ~r/^admin@/
        ]}
 
-  In this example:
-    - `user@example.com` ✅ allowed
-    - `admin@anydomain.com` ✅ allowed
-    - `someone@else.com` ❌ rejected
+  This configuration allows:
 
+    - ✅ `user@example.com` — matches domain
+    - ✅ `admin@anydomain.com` — matches local part
+    - ❌ `someone@else.com` — no match
+
+  ## SMTP Response
+
+  Rejected recipients receive:
+
+      550 5.1.1 Recipient not allowed: someone@else.com
+
+  ## Notes
+
+  - You can use both raw regex strings or precompiled `~r/.../` expressions.
+  - Matching is **case-sensitive** by default unless your regex uses the `i` flag.
+  - This adapter only applies access control at the `RCPT TO` phase.
+
+  ## See Also
+
+  Consider pairing this adapter with transformers or authentication strategies
+  to implement more fine-grained access logic.
   """
 
   @behaviour FeatherAdapters.Adapter
