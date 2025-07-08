@@ -48,26 +48,22 @@ defmodule FeatherAdapters.Delivery.ConsolePrintDelivery do
     %{}
   end
 
-  @impl true
   def handle_MAIL(from, state) do
     Logger.info("MAIL FROM: #{from}")
     {:ok, state}
   end
 
-  @impl true
   def handle_RCPT(to, state) do
     Logger.info("RCPT TO: #{to}")
     {:ok, state}
   end
 
-  @impl true
   def handle_DATA(data, state) do
     Logger.info("Received email:\n#{inspect(data)}")
     {:ok, state}
   end
 
-  @impl true
-  def terminate_session(_reason, _state) do
+  def termnate_session(_reason, _state) do
     :ok
   end
 end

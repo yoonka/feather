@@ -63,7 +63,6 @@ defmodule FeatherAdapters.Transformers.SimpleAliasResolver do
   use FeatherAdapters.Transformers.Transformable
 
 
-  @impl true
   def transform(%{to: recipients} = meta, opts) do
     alias_map = Keyword.get(opts, :aliases, %{})
 
