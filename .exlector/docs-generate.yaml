@@ -30,4 +30,4 @@ project:
           command: "mix test"
           required: false
     build:
-      command: "MIX_ENV=prod mix docs"
+      command: "mix docs"
