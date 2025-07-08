@@ -54,3 +54,21 @@ push_msa_to_sandbox:
   rules:
     - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
       when: manual
+
+
+pages:
+  image: elixir:1.18
+
+  stage: deploy
+  script:
+    - mix local.hex --force
+    - mix local.rebar --force
+    - mix deps.get
+    - mix docs
+    - mkdir -p public
+    - mv doc public
+  artifacts:
+    paths:
+      - public
+  only:
+    - main
