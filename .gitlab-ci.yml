@@ -42,7 +42,10 @@ test_build_artifact:
     - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
 
 generate_docs:
+
   stage: build
+  tags:
+    - freebsd
   needs:
     - test_build_artifact
   dependencies:
@@ -77,6 +80,8 @@ push_docs_to_sandbox:
     - generate_docs
   dependencies:
     - generate_docs
+  tags:
+    - freebsd
   script:
     - echo "Deploying docs to sandbox..."
     - sudo exlector deploy-jail -f .exlector/deploy-docs.yaml --path $DOCS_NAME.tar.gz
