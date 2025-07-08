@@ -38,6 +38,7 @@ test_build_artifact:
 
   rules:
     - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /(master|develop)/
+    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
 
 push_msa_to_sandbox:
   stage: deploy
@@ -54,6 +55,7 @@ push_msa_to_sandbox:
   rules:
     - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
       when: manual
+    
 
 
 pages:
