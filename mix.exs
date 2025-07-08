@@ -20,6 +20,7 @@ defmodule FeatherMail.MixProject do
 
   defp docs do
     [
+      main: "introduction",
       extras: list_files_recursive("guides/"),
       groups_for_extras: [
         "🧭 Guides": [
