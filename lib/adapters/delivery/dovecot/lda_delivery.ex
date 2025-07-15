@@ -3,7 +3,8 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
   A delivery adapter that uses Dovecot's LDA (Local Delivery Agent) to deliver mail
   to local user mailboxes via system invocation.
 
-  This adapter invokes `dovecot-lda` and streams the raw message to its stdin once per recipient.
+  This adapter writes the raw message to a temporary file and invokes `dovecot-lda`
+  using a shell pipe (`cat <file> | dovecot-lda -d <user>`), once per recipient.
 
   ## Expected Metadata
 
@@ -17,8 +18,7 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
   ## Example
 
       {FeatherAdapters.Delivery.DovecotLDADelivery,
-       binary_path: "/usr/lib/dovecot/dovecot-lda"}
-
+       binary_path: "/usr/local/libexec/dovecot/dovecot-lda"}
   """
 
   @behaviour FeatherAdapters.Adapter
@@ -39,10 +39,7 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
 
     recipients
     |> Enum.map(&deliver_one(&1, folder, raw, binary_path))
-    |> Enum.find(fn
-      {:error, _} -> true
-      _ -> false
-    end)
+    |> Enum.find(&match?({:error, _}, &1))
     |> case do
       nil -> {:ok, meta, state}
       {:error, reason} -> {:halt, reason, state}
@@ -60,14 +57,23 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
 
     args = ["-d", local] ++ (if folder, do: ["-m", folder], else: [])
 
-    Logger.debug("LDA: Running #{binary_path} #{Enum.join(args, " ")}")
+    {:ok, tmpfile} = Briefly.create()
+    File.write!(tmpfile, raw)
 
-    case System.cmd(binary_path, args, input: raw, stderr_to_stdout: true) do
-      {_, 0} ->
+    cmd = "cat #{tmpfile} | #{binary_path} #{Enum.join(args, " ")}"
+
+    Logger.debug("LDA: Executing shell command: #{cmd}")
+
+    {output, code} = System.cmd("sh", ["-c", cmd], stderr_to_stdout: true)
+
+    File.rm(tmpfile)
+
+    case code do
+      0 ->
         Logger.info("LDA delivery successful for #{recipient}#{if folder, do: " (#{folder})", else: ""}")
         :ok
 
-      {output, code} ->
+      _ ->
         Logger.error("LDA delivery failed for #{recipient} (#{code}): #{output}")
         {:error, {:lda_failed, code, output}}
     end
