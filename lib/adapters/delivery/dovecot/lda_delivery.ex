@@ -3,12 +3,12 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
   A delivery adapter that uses Dovecot's LDA (Local Delivery Agent) to deliver mail
   to local user mailboxes via system invocation.
 
-  This adapter invokes `dovecot-lda` and streams the raw message to its stdin.
+  This adapter invokes `dovecot-lda` and streams the raw message to its stdin once per recipient.
 
   ## Expected Metadata
 
-    - `:recipient` — the local user (required)
-    - `:folder` — optional target mailbox (e.g. `""`)
+    - `:to` — list of local recipient addresses (e.g. ["admin@example.com"])
+    - `:folder` — optional target mailbox (e.g. "Support")
 
   ## Options
 
@@ -33,33 +33,48 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
   end
 
   @impl true
-  def data(raw, %{recipient: recipient} = meta, state) do
+  def data(raw, %{to: recipients} = meta, state) when is_list(recipients) do
     folder = meta[:folder]
     binary_path = state.binary_path
 
-    if is_nil(recipient) do
-      {:halt, {:missing_recipient, "LDA delivery requires meta[:recipient]"}, state}
-    else
-      args =
-        ["-d", recipient] ++
-          if folder, do: ["-m", folder], else: []
+    recipients
+    |> Enum.map(&deliver_one(&1, folder, raw, binary_path))
+    |> Enum.find(fn
+      {:error, _} -> true
+      _ -> false
+    end)
+    |> case do
+      nil -> {:ok, meta, state}
+      {:error, reason} -> {:halt, reason, state}
+    end
+  end
 
-      Logger.debug("Running #{binary_path} #{Enum.join(args, " ")}")
+  def data(_raw, _meta, state),
+    do: {:halt, {:invalid_recipients, "Expected meta[:to] to be a list"}, state}
 
-      case System.cmd(binary_path, args, input: raw, stderr_to_stdout: true) do
-        {output, 0} ->
-          Logger.info("LDA delivery successful for #{recipient}#{if folder, do: " (#{folder})", else: ""}")
-          {:ok, meta, state}
+  defp deliver_one(recipient, folder, raw, binary_path) do
+    local =
+      recipient
+      |> String.split("@")
+      |> List.first()
 
-        {output, code} ->
-          Logger.error("LDA delivery failed (#{code}): #{output}")
-          {:halt, {:lda_failed, code, output}, state}
-      end
+    args = ["-d", local] ++ (if folder, do: ["-m", folder], else: [])
+
+    Logger.debug("LDA: Running #{binary_path} #{Enum.join(args, " ")}")
+
+    case System.cmd(binary_path, args, input: raw, stderr_to_stdout: true) do
+      {_, 0} ->
+        Logger.info("LDA delivery successful for #{recipient}#{if folder, do: " (#{folder})", else: ""}")
+        :ok
+
+      {output, code} ->
+        Logger.error("LDA delivery failed for #{recipient} (#{code}): #{output}")
+        {:error, {:lda_failed, code, output}}
     end
   rescue
     e ->
-      Logger.error("LDA exception: #{inspect(e)}")
-      {:halt, {:lda_exception, e}, state}
+      Logger.error("LDA delivery crashed for #{recipient}: #{inspect(e)}")
+      {:error, {:lda_exception, e}}
   end
 
   @impl true
@@ -69,6 +84,6 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
   def format_reason({:lda_exception, e}),
     do: "451 4.3.0 LDA delivery raised exception: #{inspect(e)}"
 
-  def format_reason({:missing_recipient, msg}),
-    do: "550 5.1.1 #{msg}"
+  def format_reason({:invalid_recipients, msg}),
+    do: "550 5.1.3 #{msg}"
 end
