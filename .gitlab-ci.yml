@@ -59,6 +59,24 @@ generate_docs:
       - $DOCS_NAME.tar.gz
     expire_in: 1 week
 
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
+
+push_msa_to_sandbox:
+  stage: deploy
+  needs:
+    - test_build_artifact
+  dependencies:
+    - test_build_artifact
+  tags:
+    - freebsd
+  script:
+    - echo "Deploying to sandbox..."
+    - sudo exlector deploy-jail -f .exlector/deploy_msa.yaml --path $ARTIFACT_NAME.tar.gz
+
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
+      when: manual
 
 push_docs_to_sandbox:
   stage: sandbox_deploy
