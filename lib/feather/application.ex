@@ -3,14 +3,19 @@ defmodule Feather.Application do
   # for more information on OTP Applications
   @moduledoc false
 alias Feather.FeatherMailSupervisor
+alias Feather.PipelineManager
 
   use Application
 
   @impl true
   def start(_type, _args) do
+
+
     children = [
 
-      {FeatherMailSupervisor, []}
+      {PipelineManager, []},
+      {Feather.ConfigLoader, []},
+      {FeatherMailSupervisor, [],}
     ]
     opts = [strategy: :one_for_one, name: Feather.Supervisor]
     Supervisor.start_link(children, opts)
