@@ -97,7 +97,8 @@ defmodule FeatherMail.MixProject do
       {:jason, "~> 1.4.4"},
       {:bcrypt_elixir, "~> 3.3.0"},
       {:gen_smtp, "~> 1.3.0"},
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true},
+      {:file_system, "~> 1.1"}
     ]
   end
 

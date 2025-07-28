@@ -8,7 +8,7 @@ defmodule Feather.Session do
     options = Application.get_env(:feather, :smtp_server)[:sessionoptions]
 
     pipeline =
-      Application.get_env(:feather, :smtp_server)[:pipeline]
+      Feather.PipelineManager.get_pipeline()
       |> Enum.map(fn {mod, adapter_opts} ->
         merged_opts = Keyword.merge(adapter_opts, opts)
         {mod, mod.init_session(merged_opts)}
