@@ -77,6 +77,8 @@ push_docs_to_sandbox:
 
 upload_package:
   stage: release
+  before_script:
+    - apt-get update && apt-get install -y curl
   script:
     - |
       curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
