@@ -59,6 +59,9 @@ generate_docs:
       - $DOCS_NAME.tar.gz
     expire_in: 1 week
 
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
+
 
 push_docs_to_sandbox:
   stage: sandbox_deploy

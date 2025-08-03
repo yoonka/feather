@@ -16,3 +16,5 @@ import Config
 #       format: "$date $time [$level] $metadata$message\n",
 #       metadata: [:user_id]
 #
+
+# tell logger to load a LoggerFileBackend

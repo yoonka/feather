@@ -27,8 +27,8 @@ config :feather, :smtp_server,
        ~r/^.+@#{domain}$/
      ]},
     {FeatherAdapters.Routing.ByDomain,
-    transformers: [{FeatherAdapters.Transformers.SimpleAliasResolver, aliases: %{
-      "support@localhost" => ["edwin@localhost", "steve@localhost","nguthiruedwin@gmail.com"]
+    transformers: [{FeatherAdapters.Transformers.Simple.AliasResolver, aliases: %{
+      "support@localhost" => ["edwin@localhost", "steve@localhost",]
     }}],
      routes: %{
         domain =>
@@ -36,7 +36,22 @@ config :feather, :smtp_server,
           FeatherAdapters.Delivery.LMTPDelivery,
           host: "localhost",
           port: 24,
-          ssl: true
+          ssl: true,
+
+          transformers: [
+            {FeatherAdapters.Transformers.Simple.MatchSender, rules: [
+              {~r/^.+@#{domain}$/, "IGNORE"},
+              {~r/^.+@example\.com$/, "example.com"}
+            ]},
+            {
+              FeatherAdapters.Transformers.Simple.MatchBody,
+              rules: [
+                {~r/payment received/i, "Payments"},
+                {~r/past due/i, "Billing"}
+              ]
+            },
+            {FeatherAdapters.Transformers.Simple.DefaultMailbox, mailbox: "INBOX"}
+          ]
          },
         :default => {FeatherAdapters.Delivery.MXDelivery, hostname: domain, tls_options: [
           versions: [:"tlsv1.2", :"tlsv1.3"],
