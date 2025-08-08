@@ -150,8 +150,8 @@ defmodule FeatherAdapters.Auth.EncryptedProvisionedPassword do
     - `:password` — override generated password
   """
   def provision_user(username, opts \\ []) do
-    keystore_path = opts[:keystore_path] || System.fetch_env!("FEATHER_KEYSTORE_PATH")
-    secret_key = opts[:secret_key] || System.fetch_env!("FEATHER_SECRET_KEY")
+    keystore_path = opts[:keystore_path]
+    secret_key = opts[:secret_key]
     encryption_key = :crypto.hash(:sha256, secret_key)
 
     password = opts[:password] || generate_password()
