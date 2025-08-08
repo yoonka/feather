@@ -4,8 +4,8 @@ stages:
   - release
 
 variables:
-  ARTIFACT_NAME: feather-main-0
-  DOCS_NAME: feather-docs-0
+  ARTIFACT_NAME: feather
+  DOCS_NAME: feather_docs
 
 .prepare_merge: &prepare_merge
   - |
@@ -32,6 +32,7 @@ test_build_artifact:
     - *prepare_merge
   script:
     - sudo -E exlector artifactory -f .exlector/artifactory.yaml --compress --build_path _build/prod/rel/feather --name $ARTIFACT_NAME
+
   artifacts:
     paths:
       - $ARTIFACT_NAME.tar.gz
