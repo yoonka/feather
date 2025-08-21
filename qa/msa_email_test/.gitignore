@@ -1,0 +1,76 @@
+# .gitignore — Elixir / Swoosh test harness
+# Keep the repo clean of generated artifacts, local configs and editor junk.
+# mix.lock stays tracked to keep dependency graph reproducible.
+
+############################
+# Build artifacts / deps
+############################
+/_build/
+/deps/
+/cover/
+/doc/
+/tmp/
+
+############################
+# BEAM / Erlang
+############################
+erl_crash.dump
+*.dump
+*.ez
+# Optional: stray bytecode outside _build
+*.beam
+
+############################
+# Static analysis (optional)
+############################
+# Ignore Dialyzer PLTs if you generate them locally
+*.plt
+*.plt.hash
+
+############################
+# Packaging
+############################
+msa_email_test-*.tar
+
+############################
+# Logs / temp files
+############################
+*.log
+*.swp
+*.swo
+*.tmp
+nohup.out
+
+############################
+# Editor / IDE
+############################
+.elixir_ls/
+.idea/
+.vscode/
+*.iml
+
+############################
+# OS cruft
+############################
+.DS_Store
+Thumbs.db
+desktop.ini
+
+############################
+# Local environment / secrets
+############################
+# Never commit local env files or PowerShell env scripts.
+.env
+.env.local
+.env*.local
+.env*.ps1
+*.env
+.envrc
+.env.ps1
+.env.local.ps1
+
+# Keep sample env templates in Git (safe to share)
+!.env.example
+!.env.sample
+!.env.remote.example.ps1
+!.env.local.example.ps1
