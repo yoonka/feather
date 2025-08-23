@@ -1,34 +1,71 @@
 defmodule FeatherAdapters.Delivery.ProcmailDelivery do
   @moduledoc """
-  Deliver mail via **procmail** using a temp file + shell pipe.
+  Deliver mail via **procmail** .
 
-  Modes:
-    * **Per-user** (default): `cat <tmp> | procmail -d <user>`
-      - User is derived from the localpart of each recipient (e.g. `alice@host` -> `alice`)
-      - Uses each user's own `~/.procmailrc` if present.
+  Each message is delivered **once per recipient** using the following command:
 
-    * **Rcfile**: `cat <tmp> | procmail /path/to/rcfile`
-      - If `:batch` is `false` (default), runs once *per recipient*.
-      - If `:batch` is `true`, runs *once total*; your rcfile should fan out.
+      cat <tmp> | procmail -a <localpart> [<rcfile>]
+
+  - The `-a` flag passes the recipient’s **localpart** (e.g. `alice` from `alice@example.com`)
+    as `$1` into the Procmail rcfile.
+  - If `:rcfile` is **not provided**, the user's `~/.procmailrc` is used by default.
+  - If `:rcfile` is provided, it is treated as a **template** string rendered via
+    `FeatherAdapters.Utils.PathTemplate` with the full recipient address as context.
 
   ## Expected Metadata
-    * `:to` — list of recipient addresses (e.g. ["alice@localhost"])
+
+    * `:to` — list of recipient addresses (e.g. `["alice@localhost"]`)
 
   ## Options
-    * `:binary_path` — path to `procmail` (default: "procmail")
-    * `:rcfile`      — path to rcfile (default: nil => per-user mode)
-    * `:batch`       — only meaningful when `:rcfile` is set; run once total (default: false)
-    * `:env`         — extra env vars (keyword/map) exported for each call (default: [])
 
-  ## Example (per-user)
-      {FeatherAdapters.Delivery.ProcmailDelivery,
-       binary_path: "/usr/bin/procmail"}
+    * `:binary_path` — path to the `procmail` binary (default: `"procmail"`)
+    * `:rcfile` — path template for the rcfile (optional). If provided, must be a
+      template string compatible with `FeatherAdapters.Utils.PathTemplate`.
+    * `:env` — extra environment variables to export (keyword or map)
 
-  ## Example (rcfile, batch)
+  ## Rcfile Template Format
+
+  The `:rcfile` option supports placeholders like:
+
+    - `{localpart}` – e.g. `"alice"`
+    - `{domain}` – e.g. `"example.com"`
+    - `{domain_root}` – e.g. `"example"` from `"example.com"`
+    - `{tld}` – e.g. `"com"`
+    - `{rcpt}` – full recipient address
+
+  Modifiers and fallbacks are supported (see `PathTemplate` docs):
+
+      {localpart|lower?default}
+      {domain_root|slug}
+      {rcpt|hash8}
+
+  ## Example Configs
+
+  ### Global `.procmailrc`
+
+  Use global procmailfile `~/.procmailrc`:
+
       {FeatherAdapters.Delivery.ProcmailDelivery,
-       rcfile: "/etc/procmailrcs/support.rc",
-       batch: true}
+      binary_path: "/usr/bin/procmail"}
+
+  ### Rcfile via template:
+
+  Use a shared rcfile path template resolved per recipient:
+
+      {FeatherAdapters.Delivery.ProcmailDelivery,
+      rcfile: "/etc/procmailrcs/{localpart|safe}.rc"}
+
+  Would resolve `alice@example.com` to:
+
+      /etc/procmailrcs/alice.rc
+
+  ## Notes
+
+  - The temporary file is created using `Briefly`.
+  - The `cat` + pipe approach is used for compatibility with Procmail’s stdin input.
+  - Shell escaping is applied to all arguments.
   """
+
 
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
@@ -39,7 +76,6 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
     %{
       binary_path: Keyword.get(opts, :binary_path, "procmail"),
       rcfile: Keyword.get(opts, :rcfile),
-      batch: Keyword.get(opts, :batch, false),
       env: normalize_env(Keyword.get(opts, :env, []))
     }
   end
@@ -57,10 +93,13 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
 
   # ——— Internals ———
 
+  defp expand_rcfile(rcfile, rcpt) do
+    {:ok,path} = FeatherAdapters.Utils.PathTemplate.render(rcfile, rcpt)
+    path
+  end
+
   defp deliver(raw, recipients, %{rcfile: nil} = st) do
-    # Per-user (-d <user>) once per recipient
     recipients
-    |> Enum.map(&localpart!/1)
     |> Enum.map(&deliver_one_per_user(&1, raw, st))
     |> first_error_or_ok()
   end
@@ -68,17 +107,13 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
   defp deliver(raw, recipients, %{rcfile: rcfile, batch: false} = st) do
     # Rcfile once per recipient (export RCPT for recipes if useful)
     recipients
-    |> Enum.map(&deliver_one_via_rcfile(&1, raw, rcfile, st))
+    |> Enum.map(&deliver_one_per_user(&1, raw, st))
     |> first_error_or_ok()
   end
 
-  defp deliver(raw, _recipients, %{rcfile: rcfile, batch: true} = st) do
-    # Rcfile once total (your rcfile should fan out)
-    run_with_pipe(st.binary_path, [rcfile], raw, st.env)
-  end
 
-  defp deliver_one_per_user(user, raw, %{binary_path: bin, env: env}) do
-    args = ["-d", user]
+  defp deliver_one_per_user(user, raw, %{binary_path: bin, env: env, rcfile: rcfile}) do
+    args = ["-a", user |> localpart!, rcfile |> expand_rcfile(user)]
     run_with_pipe(bin, args, raw, env)
     |> case do
       :ok ->
@@ -95,25 +130,7 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
       {:error, {:procmail_exception, e}}
   end
 
-  defp deliver_one_via_rcfile(rcpt, raw, rcfile, %{binary_path: bin, env: env}) do
-    # Export RCPT for rcfile logic if desired
-    env = [{"RCPT", rcpt} | env]
 
-    run_with_pipe(bin, [rcfile], raw, env)
-    |> case do
-      :ok ->
-        Logger.info("Procmail (rcfile) delivery successful for #{rcpt}")
-        :ok
-
-      {:error, {code, out}} ->
-        Logger.error("Procmail (rcfile) failed for #{rcpt} (#{code}): #{out}")
-        {:error, {:procmail_failed, code, out}}
-    end
-  rescue
-    e ->
-      Logger.error("Procmail (rcfile) crashed for #{rcpt}: #{inspect(e)}")
-      {:error, {:procmail_exception, e}}
-  end
 
   defp run_with_pipe(bin, args, raw, env) do
     {:ok, tmpfile} = Briefly.create()
