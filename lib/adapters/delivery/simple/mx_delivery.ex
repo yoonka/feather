@@ -126,13 +126,34 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
     ]
 
     case :gen_smtp_client.send_blocking({from, rcpts, raw}, options) do
-      {:ok, _} -> :ok
-      {:error, reason} when is_atom(reason) -> {:error, reason}
-      {:error, type, message} -> {:error, {type, message}}
-      {:error, {:invalid_option, opt}} -> {:error, {:invalid_option, opt}}
-      {:error, {:missing_required_option, opt}} -> {:error, {:missing_required_option, opt}}
-      other -> {:error, {:unexpected_result, other}}
+      :ok -> :ok
+      {:ok, _receipt} -> :ok
+
+      resp when is_binary(resp) or is_list(resp) ->
+        if smtp_success?(resp), do: :ok, else: {:error, {:unexpected_result, resp}}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, reason}
+
+      {:error, type, message} ->
+        {:error, {type, message}}
+
+      {:error, {:invalid_option, opt}} ->
+        {:error, {:invalid_option, opt}}
+
+      {:error, {:missing_required_option, opt}} ->
+        {:error, {:missing_required_option, opt}}
+
+      other ->
+        {:error, {:unexpected_result, other}}
     end
+  end
+
+  defp smtp_success?(resp) do
+    s = to_string(resp) |> String.trim()
+    # Accept typical 2xx formats: "250 OK", "2.0.0 Accepted", etc.
+    String.match?(s, ~r/^\s*2\d\d(\s|-)/) or
+      String.starts_with?(s, ["2.0.0", "250", "251", "252"])
   end
 
   defp lookup_mx(domain) when is_binary(domain) do
