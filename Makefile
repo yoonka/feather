@@ -1,8 +1,9 @@
 APP       ?= feather
-VERSION   ?= $(shell git describe --tags --always 2>/dev/null || echo 0.1.0)
+VERSION   ?= $(shell git describe --tags --always 2>/dev/null || echo "")
 PKGROOT    = staging
 DISTDIR    = dist
 PLIST      = plist.txt
+PKG_OUT    = $(DISTDIR)/feather.pkg   # <- final filename you want
 
 all: package
 
@@ -55,7 +56,7 @@ stage: release
 		exit 1; \
 	fi
 
-	# +MANIFEST with version substituted
+	# +MANIFEST with version substituted (internal pkg version stays intact)
 	if [ -f "package/+MANIFEST" ]; then \
 		sed "s/__VERSION__/$(VERSION)/" package/+MANIFEST > $(PKGROOT)/+MANIFEST; \
 	else \
@@ -90,13 +91,22 @@ package: stage
 	echo "== METADATA FILES CHECK =="
 	ls -la $(PKGROOT)/+* || echo "No metadata files found"
 
-	# Create package with metadata-dir mode (this picks up +PRE_INSTALL/+POST_INSTALL automatically)
+	# Create package(s)
 	pkg create -v -m $(PKGROOT) -r $(PKGROOT) -p $(PLIST) -o $(DISTDIR)
 
-	@echo "✅ Built package(s) in $(DISTDIR):"; ls -lh $(DISTDIR)
+	# Rename the newest package to a versionless filename
+	@LATEST_PKG=$$(ls -1t $(DISTDIR)/*.pkg | head -n1); \
+	if [ -z "$$LATEST_PKG" ]; then \
+		echo "❌ No .pkg produced in $(DISTDIR)"; exit 1; \
+	fi; \
+	echo "➡ Renaming $$LATEST_PKG -> $(PKG_OUT)"; \
+	rm -f $(PKG_OUT); \
+	mv "$$LATEST_PKG" $(PKG_OUT)
+
+	@echo "✅ Final package: $(PKG_OUT)"; ls -lh $(PKG_OUT)
 
 install-local:
-	pkg add $$(ls -1t $(DISTDIR)/*.pkg | head -n1)
+	pkg add $(PKG_OUT)
 
 debug-stage: stage
 	echo "=== FULL STAGING DIRECTORY TREE ==="
