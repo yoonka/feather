@@ -31,8 +31,8 @@ test_build_artifact:
   before_script:
     - *prepare_merge
   script:
-    - sudo -E exlector artifactory -f .exlector/artifactory.yaml --compress --build_path _build/prod/rel/feather --name $ARTIFACT_NAME
-
+    - sudo -E exlector artifactory -f .exlector/artifactory.yaml --compress --build_path dist --name $ARTIFACT_NAME
+    - ls -la
   artifacts:
     paths:
       - $ARTIFACT_NAME.tar.gz

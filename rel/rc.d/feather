@@ -1,0 +1,73 @@
+#!/bin/sh
+#
+# PROVIDE: feather
+# REQUIRE: LOGIN
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="feather"
+rcvar="feather_enable"
+
+# Load user overrides first
+load_rc_config "${name}"
+
+# Defaults (overridden by rc.conf/sysrc)
+: ${feather_enable:="NO"}
+: ${feather_dir:="/usr/local/feather"}
+: ${feather_cmd:="${feather_dir}/bin/feather"}
+: ${feather_args:="start"}
+: ${feather_user:="feather"}
+: ${feather_group:="feather"}
+: ${feather_log:="/var/log/feather/feather.log"}
+: ${feather_pid:="/var/run/feather/feather.pid"}
+: ${feather_config_folder:="/usr/local/etc/feather"}  # <— what your app reads
+
+pidfile="${feather_pid}"
+required_files="${feather_cmd}"
+
+start_precmd="feather_precmd"
+start_cmd="feather_start"
+stop_cmd="feather_stop"
+status_cmd="feather_status"
+
+feather_precmd()
+{
+  /usr/bin/install -d -o "${feather_user}" -g "${feather_group}" -m 0755 "$(dirname "${feather_log}")"
+  /usr/bin/install -d -o "${feather_user}" -g "${feather_group}" -m 0755 "$(dirname "${feather_pid}")"
+  /usr/bin/install -d -o root -g wheel -m 0755 "${feather_config_folder}"
+}
+
+feather_start()
+{
+  echo "Starting ${name}."
+  /usr/sbin/daemon \
+    -p "${pidfile}" \
+    -u "${feather_user}" \
+    -o "${feather_log}" \
+    /bin/sh -c "env FEATHER_CONFIG_FOLDER='${feather_config_folder}' exec '${feather_cmd}' ${feather_args}"
+}
+
+feather_stop()
+{
+  if [ -x "${feather_cmd}" ]; then
+    "${feather_cmd}" stop >/dev/null 2>&1 || true
+  fi
+  if [ -r "${pidfile}" ]; then
+    kill -TERM "$(cat "${pidfile}")" 2>/dev/null || true
+    sleep 1
+    rm -f "${pidfile}" 2>/dev/null || true
+  fi
+}
+
+feather_status()
+{
+  if [ -r "${pidfile}" ] && kill -0 "$(cat "${pidfile}" 2>/dev/null)" 2>/dev/null; then
+    echo "${name} running as pid $(cat "${pidfile}")"
+    return 0
+  fi
+  echo "${name} not running"
+  return 1
+}
+
+run_rc_command "$1"

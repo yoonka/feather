@@ -1,0 +1,76 @@
+#!/bin/sh
+# Runs after files are extracted
+
+set -e
+
+APP=feather
+FEATHER_DIR="/usr/local/feather"
+CONF_DIR="/usr/local/etc/feather"
+
+# Ensure dirs exist (in case pre-install was skipped)
+install -d -o root   -g wheel   -m 0755 "$CONF_DIR"
+install -d -o feather -g feather -m 0755 /var/log/feather
+install -d -o feather -g feather -m 0755 /var/run/feather
+
+# Drop default config files if missing
+[ -f "$CONF_DIR/.env" ] || {
+  cat > "$CONF_DIR/.env" <<'EOF'
+# Feather environment
+MIX_ENV=prod
+# Add your secrets here
+EOF
+  chown feather:feather "$CONF_DIR/.env"
+  chmod 0640 "$CONF_DIR/.env"
+  echo "Created configuration file: $CONF_DIR/.env"
+}
+
+[ -f "$CONF_DIR/server.exs" ] || {
+  cat > "$CONF_DIR/server.exs" <<'EOF'
+server =
+  [
+    name: "Feather MTA Server",
+    address: {0, 0, 0, 0},
+    port: 25,
+    protocol: :tcp,
+    domain: "localhost",
+    sessionoptions: []
+  ]
+EOF
+  chown feather:feather "$CONF_DIR/server.exs"
+  chmod 0644 "$CONF_DIR/server.exs"
+  echo "Created sample configuration: $CONF_DIR/server.exs"
+}
+
+[ -f "$CONF_DIR/pipeline.exs" ] || {
+  cat > "$CONF_DIR/pipeline.exs" <<'EOF'
+pipeline = []
+EOF
+  chown feather:feather "$CONF_DIR/pipeline.exs"
+  chmod 0644 "$CONF_DIR/pipeline.exs"
+  echo "Created sample configuration: $CONF_DIR/pipeline.exs"
+}
+
+# sysrc hints (do not fail if sysrc is missing)
+if command -v sysrc >/dev/null 2>&1; then
+  sysrc -q feather_enable=YES >/dev/null || true
+  sysrc -q feather_dir="$FEATHER_DIR" >/dev/null || true
+  sysrc -q feather_cmd="$FEATHER_DIR/bin/feather" >/dev/null || true
+  sysrc -q feather_args="start" >/dev/null || true
+  sysrc -q feather_user="feather" >/dev/null || true
+  sysrc -q feather_group="feather" >/dev/null || true
+  sysrc -q feather_config_folder="$CONF_DIR" >/dev/null || true
+  sysrc -q feather_envfile="$CONF_DIR/.env" >/dev/null || true
+  sysrc -q feather_pipeline="$CONF_DIR/pipeline.exs" >/dev/null || true
+fi
+
+cat <<EOF
+==========================================
+Feather mail server installation complete
+==========================================
+Config directory: $CONF_DIR
+
+To enable at boot: sysrc feather_enable=YES
+To start now:      service feather start
+EOF
+
+exit 0
