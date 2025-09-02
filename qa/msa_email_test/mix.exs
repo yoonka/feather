@@ -21,7 +21,8 @@ defmodule MsaEmailTest.MixProject do
     [
       {:swoosh, "~> 1.19"},  # email library
       {:gen_smtp, "~> 1.2"}, # SMTP transport
-      {:hackney, "~> 1.18"}  # HTTP client Swoosh expects by default
+      {:hackney, "~> 1.18"},
+      {:castore, "~> 1.0"}  # HTTP client Swoosh expects by default
     ]
   end
 end

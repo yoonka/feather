@@ -39,13 +39,6 @@ parse_int = fn value, default ->
   end
 end
 
-tls =
-  case System.get_env("SMTP_TLS", "never") do
-    "always" -> :always
-    "if_available" -> :if_available
-    _ -> :never
-  end
-
 auth =
   case System.get_env("SMTP_AUTH", "never") do
     "always" -> :always
@@ -59,13 +52,31 @@ port  = parse_int.(System.get_env("SMTP_PORT", "25"), 25)
 retries     = parse_int.(System.get_env("SMTP_RETRIES", "0"), 0)
 retry_delay = parse_int.(System.get_env("SMTP_RETRY_DELAY_MS", "0"), 0)
 
+# --- CA bundle (Windows-friendly): try OS trust store, fallback to castore ---
+# Requires {:castore, "~> 1.0"} in mix.exs
+cacerts =
+  case :public_key.cacerts_get() do
+    [] -> CAStore.cacerts()
+    list -> list
+  end
+
 mailer_cfg = [
   adapter: Swoosh.Adapters.SMTP,
   relay: relay,
   port: port,
   username: System.get_env("SMTP_USERNAME", ""),
   password: System.get_env("SMTP_PASSWORD", ""),
-  tls: tls,
+
+  # STARTTLS on 587
+  tls: :always,
+  tls_options: [
+    server_name_indication: to_charlist(relay),
+    versions: [:"tlsv1.3", :"tlsv1.2"],
+    verify: :verify_peer,
+    cacerts: cacerts,
+    depth: 3
+  ],
+
   auth: auth,
   retries: retries,
   retry_delay: retry_delay
@@ -79,3 +90,13 @@ Application.put_env(:swoosh, :api_client, Swoosh.ApiClient.Hackney)
 
 # --- Load support helpers ---
 Code.require_file("support/mailer_helpers.ex", __DIR__)
+
+# --- Global mailer module selection for tests ---
+# When TEST_DEBUG=1, route deliver() calls through DebugMailer to print results.
+# Otherwise use the real Mailer module.
+if System.get_env("TEST_DEBUG") in ["1", "true"] do
+  IO.puts("[DEBUG] Global mailer debug enabled: using MsaEmailTest.DebugMailer")
+  Application.put_env(:msa_email_test, :mailer_mod, MsaEmailTest.DebugMailer)
+else
+  Application.put_env(:msa_email_test, :mailer_mod, MsaEmailTest.Mailer)
+end
