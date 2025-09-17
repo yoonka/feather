@@ -1,0 +1,26 @@
+# Compiled files
+/_build/
+deps/
+*.ez
+
+# Generated files
+erl_crash.dump
+*.beam
+
+# Elixir
+/.elixir_ls/
+
+# Tests
+cover/
+test-*.xml
+
+# Mix
+mix.lock
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
