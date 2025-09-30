@@ -35,9 +35,22 @@ defmodule Feather.ConfigLoader do
   end
 
   def file_watcher do
-   dirs = [server_file(), pipeline_file()]
-   {:ok, pid} = FileSystem.start_link(dirs: dirs, name: :config_watcher)
-   FileSystem.subscribe(pid)
+    dirs = [server_file(), pipeline_file()]
+
+    case FileSystem.start_link(dirs: dirs, name: :config_watcher) do
+      {:ok, pid} ->
+        FileSystem.subscribe(pid)
+        Logger.info("Started config watcher on #{inspect(dirs)}")
+        pid
+
+      {:error, reason} ->
+        Logger.warning("Config watcher could not start: #{inspect(reason)}")
+        :ignore
+
+      :ignore ->
+        Logger.warning("Config watcher backend not supported on this OS, hot reload disabled")
+        :ignore
+    end
   end
   def load! do
     load_server_config!()
