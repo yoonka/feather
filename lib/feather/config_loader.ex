@@ -12,7 +12,7 @@ defmodule Feather.ConfigLoader do
 
 
   def config_dir do
-    Application._env(:feather, :config_folder)
+    Application.get_env(:feather, :config_folder)
   end
 
   def server_file do
@@ -35,7 +35,8 @@ defmodule Feather.ConfigLoader do
   end
 
   def file_watcher do
-   {:ok, pid} = FileSystem.start_link(dirs: [@server_file, @pipeline_file], name: :config_watcher)
+   dirs = [server_file(), pipeline_file()]
+   {:ok, pid} = FileSystem.start_link(dirs: dirs, name: :config_watcher)
    FileSystem.subscribe(pid)
   end
   def load! do
@@ -99,17 +100,18 @@ defmodule Feather.ConfigLoader do
   end
 
   @impl true
-  def handle_info({:file_event, _watcher_pid, {@pipeline_file, _events}}, state) do
-    Logger.info("Change on Pipeline Config: Hot Reloading")
+  def handle_info({:file_event, _watcher_pid, {path, _events}}, state) do
+    cond do
+      Path.expand(path) == pipeline_file() ->
+        Logger.info("Change on Pipeline Config: Hot Reloading")
+        load_pipeline_config!()
 
-    load_pipeline_config!()
+      Path.expand(path) == server_file() ->
+        Logger.info("Change on Server Config: Cannot Hot Reload Please Restart Server ")
 
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({:file_event, _watcher_pid, {@server_file, _events}}, state) do
-    Logger.info("Change on Server Config: Cannot Hot Reload Please Restart Server ")
+      true ->
+        :ok
+    end
 
     {:noreply, state}
   end
