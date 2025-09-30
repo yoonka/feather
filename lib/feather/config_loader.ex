@@ -9,7 +9,7 @@ defmodule Feather.ConfigLoader do
 
   Raises if either file is missing or does not return a keyword list.
   """
-  @config_dir System.get_env("FEATHER_CONFIG_FOLDER") || "/etc/feather"
+  @config_dir Application.get_env(:feather, :config_folder)
   @server_file Path.join(@config_dir, "server.exs") |> Path.expand()
   @pipeline_file Path.join(@config_dir, "pipeline.exs") |> Path.expand()
 
