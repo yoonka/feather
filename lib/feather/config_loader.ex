@@ -9,9 +9,19 @@ defmodule Feather.ConfigLoader do
 
   Raises if either file is missing or does not return a keyword list.
   """
-  @config_dir Application.get_env(:feather, :config_folder)
-  @server_file Path.join(@config_dir, "server.exs") |> Path.expand()
-  @pipeline_file Path.join(@config_dir, "pipeline.exs") |> Path.expand()
+
+
+  def config_dir do
+    Application._env(:feather, :config_folder)
+  end
+
+  def server_file do
+    Path.join(config_dir(), "server.exs") |> Path.expand()
+  end
+  def pipeline_file do
+    Path.join(config_dir(), "pipeline.exs") |> Path.expand()
+  end
+
 
   def start_link(_args) do
     GenServer.start_link(__MODULE__, [], [])
@@ -35,7 +45,7 @@ defmodule Feather.ConfigLoader do
 
   def load_server_config! do
     server_opts =
-      @server_file
+      server_file()
       |> ensure_exists!("server")
       |> eval_keyword!()
 
@@ -45,7 +55,7 @@ defmodule Feather.ConfigLoader do
 
   def load_pipeline_config!() do
     pipeline =
-      @pipeline_file
+      pipeline_file()
       |> ensure_exists!("pipeline")
       |> eval_keyword!()
 
