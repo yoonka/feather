@@ -1,0 +1,46 @@
+# Build / deps
+/_build/
+deps/
+*.ez
+
+# Runtime / crash
+erl_crash.dump
+
+# Compiled artifacts (uglavnom u _build/, ali za svaki slučaj)
+*.beam
+
+# ElixirLS (VS Code)
+.elixir_ls/
+
+# Test artifacts
+cover/
+test-*.xml
+.exunit
+
+# Dialyzer
+_plts/
+*.plt
+*.plt.hash
+
+# Credo / Formatter
+.credo/
+.formatter.dump
+
+# IEx history
+.iex_history
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Env / secrets
+.env
+.env.*
+.envrc
+*.key
+*.pem
+
