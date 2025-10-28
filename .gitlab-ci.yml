@@ -44,7 +44,6 @@ test_build_artifact:
     - if: $CI_COMMIT_TAG
 
 generate_docs:
-
   stage: build
   tags:
     - freebsd
@@ -63,8 +62,6 @@ generate_docs:
   rules:
     - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "develop"
     - if: $CI_COMMIT_TAG
-    
-
 
 push_docs_to_sandbox:
   stage: sandbox_deploy
@@ -83,29 +80,35 @@ push_docs_to_sandbox:
 
 upload_package:
   stage: release
-  before_script:
-    - apt-get update && apt-get install -y curl
-  script:
-    - |
-      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-       --upload-file $ARTIFACT_NAME.tar.gz \
-       "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/feather/${CI_COMMIT_TAG}/$ARTIFACT_NAME.tar.gz"
-      curl --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-       --upload-file $DOCS_NAME.tar.gz \
-       "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/feather/${CI_COMMIT_TAG}/$DOCS_NAME.tar.gz"
+  image: curlimages/curl:latest
   needs:
     - test_build_artifact
     - generate_docs
   dependencies:
     - test_build_artifact
     - generate_docs
-
+  script:
+    - echo "Uploading artifact and docs tarballs..."
+    - |
+      curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --upload-file $ARTIFACT_NAME.tar.gz \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/feather/${CI_COMMIT_TAG}/$ARTIFACT_NAME.tar.gz"
+    - |
+      if [ -f "$DOCS_NAME.tar.gz" ]; then
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          --upload-file "$DOCS_NAME.tar.gz" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/feather/${CI_COMMIT_TAG}/$DOCS_NAME.tar.gz"
+      else
+        echo "Docs tarball not present; skipping docs upload."
+      fi
   rules:
     - if: $CI_COMMIT_TAG
 
 create_release:
   stage: release
   image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - upload_package
   rules:
     - if: $CI_COMMIT_TAG
   script:
@@ -116,5 +119,3 @@ create_release:
         --description "Automated release for Feather $CI_COMMIT_TAG" \
         --assets-link "{\"name\":\"Feather Binary\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/feather/${CI_COMMIT_TAG}/$ARTIFACT_NAME.tar.gz\"}" \
         --assets-link "{\"name\":\"Feather Docs\",\"url\":\"${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/feather/${CI_COMMIT_TAG}/$DOCS_NAME.tar.gz\"}"
-  needs:
-    - upload_package
