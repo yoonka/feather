@@ -42,17 +42,31 @@ defmodule Feather.Session do
         [
           {~c"STARTTLS", true}
         ] ++ auth_extensions
+      else
+        auth_extensions
       end
 
     {:ok, new_extensions, state}
   end
 
+  def handle_HELO(domain, {:ok, state}) do
+    handle_HELO(domain, state)
+  end
+
   @impl true
   def handle_HELO(domain, state), do: step(:helo, domain, state)
+
+  def handle_AUTH(type, username, password, {:ok, state}) do
+    handle_AUTH(type, username, password, state)
+  end
 
   @impl true
   def handle_AUTH(_type, username, password, state) do
     step(:auth, {username, password}, state)
+  end
+
+  def handle_MAIL(from, {:ok, state}) do
+    handle_MAIL(from, state)
   end
 
   @impl true
@@ -61,6 +75,10 @@ defmodule Feather.Session do
   @impl :gen_smtp_server_session
   def handle_MAIL_extension(_extension, _state) do
     :error
+  end
+
+  def handle_RCPT(to, {:ok, state}) do
+    handle_RCPT(to, state)
   end
 
   @impl true
@@ -146,6 +164,7 @@ defmodule Feather.Session do
         {:ok, %{state | pipeline: Enum.reverse(new_pipeline), meta: new_meta}}
     end
   end
+
 
   defp format_reason({mod, reason}) do
     if function_exported?(mod, :format_reason, 1) do
