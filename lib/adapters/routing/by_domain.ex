@@ -52,6 +52,7 @@ defmodule FeatherAdapters.Routing.ByDomain do
 
   @impl true
   def data(message, %{from: from, to: recipients} = meta, %{routes: routes} = state) do
+
     grouped =
       Enum.group_by(recipients, fn email ->
         [_user, domain] = String.split(email, "@")

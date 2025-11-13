@@ -114,7 +114,6 @@ defmodule Feather.Session do
 
   @impl true
   def handle_other(cmd, args, state) do
-    IO.inspect({:unhandled, cmd, args})
     {:noreply, state}
   end
 

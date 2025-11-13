@@ -38,7 +38,7 @@ defmodule FeatherAdapters.Transformers.Simple.AliasResolver do
   ```elixir
   {FeatherAdapters.Routing.ByDomain,
    transformers: [
-     {FeatherAdapters.Transformers.SimpleAliasResolver,
+     {FeatherAdapters.Transformers.Simple.AliasResolver,
       aliases: %{
         "support@localhost" => [
           "edwin@localhost",
@@ -60,12 +60,10 @@ defmodule FeatherAdapters.Transformers.Simple.AliasResolver do
   - `FeatherAdapters.Transformers.Transformable`
   """
 
-  use FeatherAdapters.Transformers.Transformable
 
 
   def transform(%{to: recipients} = meta, opts) do
     alias_map = Keyword.get(opts, :aliases, %{})
-
     new_rcpts =
       recipients
       |> Enum.flat_map(fn rcpt ->
@@ -75,6 +73,7 @@ defmodule FeatherAdapters.Transformers.Simple.AliasResolver do
           resolved when is_list(resolved) -> resolved
         end
       end)
+
 
     Map.put(meta, :to, Enum.uniq(new_rcpts))
   end

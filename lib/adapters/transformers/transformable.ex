@@ -51,19 +51,26 @@ end
       end
 
       def transform_meta(meta, %{transformers: transformers} = state) do
-
-        Enum.reduce(transformers, meta, fn
+        result = Enum.reduce(transformers, meta, fn
           {mod, opts}, acc ->
+            Code.ensure_loaded(mod)
             case function_exported?(mod, :transform, 2) do
-              true -> mod.transform(acc, opts)
-              false -> acc
+              true ->
+                result = mod.transform(acc, opts)
+                result
+              false ->
+                acc
             end
           mod, acc when is_atom(mod) ->
+            Code.ensure_loaded(mod)
             case function_exported?(mod, :transform, 2) do
-              true -> mod.transform(acc, %{})
-              false -> acc
+              true ->
+                mod.transform(acc, %{})
+              false ->
+                acc
             end
         end)
+        result
       end
 
       def transform_data(raw, meta, state) do
@@ -117,7 +124,6 @@ end
             defoverridable [data: 3]
 
             def data(raw, meta, state) do
-
               meta = transform_meta(meta, state)
               {raw, meta} = transform_data(raw, meta, state)
               super(raw, meta, state)
