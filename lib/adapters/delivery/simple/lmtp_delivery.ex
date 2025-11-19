@@ -133,7 +133,6 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   defp deliver_lmtp(from, rcpts, raw, state, opts) do
     mailbox = Keyword.get(opts, :mailbox, "INBOX")
 
-    IO.inspect("Placing on mailbox: #{mailbox}")
 
     with {:ok, socket} <- connect(state),
          :ok <- read_lmtp_ok(socket),

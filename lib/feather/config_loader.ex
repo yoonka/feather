@@ -23,7 +23,7 @@ defmodule Feather.ConfigLoader do
   @impl true
   def init(_args) do
     dir = config_dir!()
-    Logger.info("🔄 Loading Feather config from: #{dir}")
+    Logger.info(" Loading Feather config from: #{dir}")
     load!()
     watch_dir!(dir)
     {:ok, nil}
@@ -42,7 +42,7 @@ defmodule Feather.ConfigLoader do
       nil ->
         # Provide a clear, actionable error if runtime.exs didn’t set it
         raise """
-        ❌ Missing :config_folder for :feather.
+        Missing :config_folder for :feather.
         Ensure config/runtime.exs sets:
 
             config :feather, :config_folder, "/usr/local/etc/feather" # FreeBSD
@@ -55,7 +55,7 @@ defmodule Feather.ConfigLoader do
           dir
         else
           raise """
-          ❌ Config directory does not exist: #{dir}
+           Config directory does not exist: #{dir}
           Create it and place #{@server_file} and #{@pipeline_file} inside.
           """
         end
@@ -84,7 +84,7 @@ defmodule Feather.ConfigLoader do
   defp ensure_exists!(path, which) do
     unless File.exists?(path) do
       raise """
-      ❌ Could not load Feather #{which} config: file not found at
+      Could not load Feather #{which} config: file not found at
          #{path}
 
       Expected files in #{config_dir!()}:
@@ -102,14 +102,14 @@ defmodule Feather.ConfigLoader do
 
       {other, _} ->
         raise """
-        ❌ Invalid Feather #{which} config in #{path}
+        Invalid Feather #{which} config in #{path}
         Expected a keyword list, got:
 
             #{inspect(other, pretty: true, limit: :infinity)}
         """
 
       _ ->
-        raise "❌ Unexpected return value when evaluating #{path}"
+        raise "Unexpected return value when evaluating #{path}"
     end
   end
 
@@ -153,7 +153,7 @@ defmodule Feather.ConfigLoader do
 
   @impl true
   def handle_info({:file_event, _watcher_pid, :stop}, state) do
-    Logger.warning("⚠️  Config file watcher stopped — hot reload disabled.")
+    Logger.warning("Config file watcher stopped — hot reload disabled.")
     {:noreply, state}
   end
 end
