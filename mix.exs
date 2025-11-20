@@ -57,6 +57,9 @@ defmodule FeatherMail.MixProject do
           "guides/adapters/delivery/local_delivery.md",
           "guides/adapters/delivery/smtp_forward.md"
         ],
+        "📦 Adapters · Logging": [
+          "guides/adapters/logging/mail_logger.md"
+        ],
         Tutorials: [
           "guides/how_to/set_up_msa.md"
         ]
@@ -90,6 +93,9 @@ defmodule FeatherMail.MixProject do
           FeatherAdapters.Delivery.SimpleLocalDelivery,
           FeatherAdapters.Delivery.SimpleRejectDelivery
         ],
+        "📝 Logging Adapters": [
+          FeatherAdapters.Logging.MailLogger
+        ],
         "🪄 Transformers": [
           FeatherAdapters.Transformers.SimpleAliasResolver,
           FeatherAdapters.Transformers.Transformable
@@ -102,7 +108,6 @@ defmodule FeatherMail.MixProject do
     [
       {:jason, "~> 1.4.4"},
       {:bcrypt_elixir, "~> 3.3.0"},
-      {:logger_file_backend, "~> 0.0.14"},
       {:briefly, "~> 0.5.0"},
       {:gen_smtp, "~> 1.3.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true},
