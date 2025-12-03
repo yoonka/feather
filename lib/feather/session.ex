@@ -30,23 +30,26 @@ defmodule Feather.Session do
 
   @impl true
   def handle_EHLO(_domain, extensions, state) do
-    tls? = state.opts[:tls] in [:always, :if_available]
+    opts = state.opts || %{}
+    tls? = opts[:tls] in [:always, :if_available]
+    max_size = opts[:max_size] || 10_485_760  # 10MB default
 
-    auth_extensions =
-      [
-        {~c"AUTH", ~c"PLAIN LOGIN"}
-      ] ++ extensions
+    smtp_extensions = [
+      {~c"SIZE", ~c"#{max_size}"},
+      {~c"PIPELINING", true},
+      {~c"8BITMIME", true},
+      {~c"ENHANCEDSTATUSCODES", true},
+      {~c"AUTH", ~c"PLAIN LOGIN"}
+    ]
 
-    new_extensions =
+    smtp_extensions =
       if tls? do
-        [
-          {~c"STARTTLS", true}
-        ] ++ auth_extensions
+        [{~c"STARTTLS", true} | smtp_extensions]
       else
-        auth_extensions
+        smtp_extensions
       end
 
-    {:ok, new_extensions, state}
+    {:ok, smtp_extensions ++ extensions, state}
   end
 
   def handle_HELO(domain, {:ok, state}) do
