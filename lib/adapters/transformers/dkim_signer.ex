@@ -1,6 +1,7 @@
 defmodule FeatherAdapters.Transformers.DKIMSigner do
   @moduledoc """
   Signs outgoing emails with DKIM using gen_smtp's mimemail encoder.
+  This transformer should be applied to your forwarder adapter.
 
   ## Options
 
