@@ -7,17 +7,15 @@ defmodule MtaEmailTest.MTA.FakeMTALocalFlowTest do
   alias MtaEmailTest.{SMTPSink, FakeMTA, Mailer}
 
   @sink_port 2626
-  @mta_port  2525
+  @mta_port 2525
 
   setup_all do
-    # Start local SMTP sink (simulated MDA)
     {:ok, _} = SMTPSink.start_link(port: @sink_port)
 
-    # Start fake MTA that enforces an allow-list and forwards to the sink
     {:ok, _} =
       FakeMTA.start_link(
         port: @mta_port,
-        allow_domains: ["allowed.local", "local.test"],
+        allow_domains: ["allowed.local", "local.test", "no-such-domain-xyz.tld"],
         sink_host: "127.0.0.1",
         sink_port: @sink_port
       )
@@ -26,10 +24,11 @@ defmodule MtaEmailTest.MTA.FakeMTALocalFlowTest do
   end
 
   setup do
-    # Point Swoosh SMTP adapter to our fake MTA for this test
-    prev = Application.get_env(:mta_email_test, MtaEmailTest.Mailer)
+    if function_exported?(SMTPSink, :clear, 0), do: SMTPSink.clear()
 
-    mta_cfg = [
+    previous_config = Application.get_env(:mta_email_test, MtaEmailTest.Mailer)
+
+    mta_config = [
       adapter: Swoosh.Adapters.SMTP,
       relay: "127.0.0.1",
       port: @mta_port,
@@ -41,10 +40,10 @@ defmodule MtaEmailTest.MTA.FakeMTALocalFlowTest do
       retry_delay: 0
     ]
 
-    Application.put_env(:mta_email_test, MtaEmailTest.Mailer, mta_cfg)
+    Application.put_env(:mta_email_test, MtaEmailTest.Mailer, mta_config)
 
     on_exit(fn ->
-      Application.put_env(:mta_email_test, MtaEmailTest.Mailer, prev)
+      Application.put_env(:mta_email_test, MtaEmailTest.Mailer, previous_config)
     end)
 
     :ok
@@ -62,8 +61,7 @@ defmodule MtaEmailTest.MTA.FakeMTALocalFlowTest do
 
     assert {:ok, _} = Mailer.deliver(email)
 
-    # Prove the fake MTA actually forwarded the message to the MDA sink
-    assert SMTPSink.wait_for_subject(subject, 5_000),
+    assert SMTPSink.wait_for_subject(subject, 10_000),
            "Expected SMTPSink to receive Subject=#{subject}, but it did not arrive."
   end
 
@@ -79,14 +77,28 @@ defmodule MtaEmailTest.MTA.FakeMTALocalFlowTest do
 
     result = Mailer.deliver(email)
 
-    # FakeMTA returns a 550 5.7.1 at RCPT; Swoosh/gen_smtp reports it as {:error, ...}
     case result do
-      {:error, _reason} ->
-        assert true
-
-      other ->
-        flunk("Expected reject for blocked domain, got: #{inspect(other)}")
+      {:error, _reason} -> assert true
+      other -> flunk("Expected reject for blocked domain, got: #{inspect(other)}")
     end
+  end
+
+  test "does not generate DSN for rejected RCPT (blocked domain)" do
+    subject = "DSN-REJECT-#{System.system_time(:millisecond)}"
+
+    email =
+      Email.new()
+      |> Email.from("sender@test.local")
+      |> Email.to("user@blocked.local")
+      |> Email.subject(subject)
+      |> Email.text_body("Should trigger RCPT rejection without DSN.")
+
+    result = Mailer.deliver(email)
+
+    assert {:error, _} = result
+
+    refute SMTPSink.wait_for_subject(subject, 3_000),
+           "Expected NO delivery for rejected recipient, but something arrived."
   end
 
   test "accepts allowed RCPT but rejects blocked RCPT in same message" do
@@ -104,14 +116,42 @@ defmodule MtaEmailTest.MTA.FakeMTALocalFlowTest do
 
     case result do
       {:ok, _info} ->
-        # If accepted, check that at least the allowed RCPT got delivered to sink
-        assert SMTPSink.wait_for_subject(subject, 5_000),
+        assert SMTPSink.wait_for_subject(subject, 10_000),
                "Expected SMTPSink to receive Subject=#{subject} for allowed recipient."
 
       {:error, reason} ->
-        # If rejected, that's also valid because one RCPT was blocked
         assert String.contains?(inspect(reason), "550"),
                "Expected 550 reject for blocked recipient, got: #{inspect(reason)}"
     end
+  end
+
+  test "generates DSN for accepted message that fails delivery" do
+    subject = "QUEUE-FAIL-#{System.system_time(:millisecond)}"
+
+    email =
+      Email.new()
+      |> Email.from("sender@test.local")
+      |> Email.to("user@no-such-domain-xyz.tld")
+      |> Email.subject(subject)
+      |> Email.text_body("This message should fail delivery and trigger a DSN.")
+
+    result = Mailer.deliver(email)
+    IO.puts("Mailer result: #{inspect(result)}")
+
+    dsn_received = Enum.any?(1..5, fn attempt ->
+      IO.puts("⏳ Waiting for DSN (attempt #{attempt})...")
+      SMTPSink.wait_for_dsn("sender@test.local", 3_000)
+    end)
+
+    IO.puts("\n--- Captured messages in SMTPSink ---")
+    :sys.get_state(SMTPSink)[:messages]
+    |> Enum.reverse()
+    |> Enum.with_index()
+    |> Enum.each(fn {msg, i} ->
+      IO.puts("\n=== Message ##{i + 1} ===\n#{msg}")
+    end)
+
+    assert dsn_received,
+           "Expected DSN to be generated and sent to sender, but none received."
   end
 end

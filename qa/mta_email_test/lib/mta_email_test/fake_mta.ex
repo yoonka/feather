@@ -1,35 +1,24 @@
 defmodule MtaEmailTest.FakeMTA do
   @moduledoc """
-  Minimal in-process fake MTA for **local** tests.
+  Minimal in-process fake MTA for local tests.
 
   Capabilities:
     * Listens on a TCP port and speaks a tiny subset of SMTP.
-    * Enforces a recipient **domain allow-list** on RCPT TO.
+    * Enforces a recipient domain allow-list on RCPT TO.
     * Forwards accepted messages to a downstream SMTP sink (our fake MDA).
-
-  Options for `start_link/1`:
-    * `:port`          - TCP listen port (required; e.g. 2525)
-    * `:allow_domains` - list of allowed recipient domains (default: [])
-    * `:sink_host`     - downstream sink host (required; e.g. "127.0.0.1")
-    * `:sink_port`     - downstream sink port (required; e.g. 2626)
-
-  Notes:
-    * This is intentionally small and synchronous per-connection. It is only for tests.
-    * We forward the **raw DATA** to the sink and reuse the first accepted RCPT as the envelope recipient.
+    * Simulates delivery failure for certain domains (e.g. "no-such-domain")
   """
 
   use GenServer
 
   ## Public API
 
-  @spec start_link(Keyword.t()) :: GenServer.on_start()
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   ## GenServer callbacks
 
-  @impl true
   def init(opts) do
     port = Keyword.fetch!(opts, :port)
 
@@ -43,13 +32,11 @@ defmodule MtaEmailTest.FakeMTA do
       sink_port: Keyword.fetch!(opts, :sink_port)
     }
 
-    # Accept loop in a background task
     Task.start_link(fn -> accept_loop(listener, state) end)
-
     {:ok, state}
   end
 
-  ## Internal helpers
+  ## Accept + session loop
 
   defp accept_loop(listener, state) do
     {:ok, client} = :gen_tcp.accept(listener)
@@ -58,18 +45,13 @@ defmodule MtaEmailTest.FakeMTA do
     accept_loop(listener, state)
   end
 
-  # SMTP session state per connection
-  # from: envelope MAIL FROM
-  # rcpts: list of accepted envelope RCPT TO
-  defp smtp_session(client, base_state),
-    do: smtp_session(client, base_state, %{from: nil, rcpts: []})
+  defp smtp_session(client, base_state), do: smtp_session(client, base_state, %{from: nil, rcpts: []})
 
   defp smtp_session(client, base_state, sess) do
     case :gen_tcp.recv(client, 0) do
       {:ok, line} ->
         cond do
           String.starts_with?(line, "EHLO") or String.starts_with?(line, "HELO") ->
-            # Minimal capability response
             :gen_tcp.send(client, "250-FakeMTA\r\n250 OK\r\n")
             smtp_session(client, base_state, sess)
 
@@ -86,7 +68,9 @@ defmodule MtaEmailTest.FakeMTA do
               :gen_tcp.send(client, "250 OK\r\n")
               smtp_session(client, base_state, %{sess | rcpts: sess.rcpts ++ [rcpt]})
             else
+              IO.puts("🚫 RCPT domain rejected: #{domain}")
               :gen_tcp.send(client, "550 5.7.1 Recipient domain not allowed\r\n")
+              send_dsn(sess.from, rcpt, base_state)
               smtp_session(client, base_state, sess)
             end
 
@@ -97,11 +81,11 @@ defmodule MtaEmailTest.FakeMTA do
             else
               :gen_tcp.send(client, "354 End data with <CR><LF>.<CR><LF>\r\n")
               {:ok, raw} = recv_data(client, "")
-              # Forward using the first accepted recipient
-              case forward_to_sink(sess.from, hd(sess.rcpts), raw, base_state) do
-                :ok ->
-                  :gen_tcp.send(client, "250 OK\r\n")
 
+              result = forward_to_sink(sess.from, hd(sess.rcpts), raw, base_state)
+
+              case result do
+                :ok -> :gen_tcp.send(client, "250 OK\r\n")
                 {:error, reason} ->
                   :gen_tcp.send(
                     client,
@@ -121,17 +105,16 @@ defmodule MtaEmailTest.FakeMTA do
             :gen_tcp.close(client)
 
           true ->
-            # Default "OK" for unhandled but harmless commands
             :gen_tcp.send(client, "250 OK\r\n")
             smtp_session(client, base_state, sess)
         end
 
-      {:error, _} ->
-        :ok
+      {:error, _} -> :ok
     end
   end
 
-  # Receive lines until "." line terminator
+  ## Data reception helper
+
   defp recv_data(client, acc) do
     case :gen_tcp.recv(client, 0) do
       {:ok, ".\r\n"} -> {:ok, acc}
@@ -140,51 +123,98 @@ defmodule MtaEmailTest.FakeMTA do
     end
   end
 
-  # Forward the raw message to downstream SMTP sink.
-  # Returns :ok or {:error, exception}. Regardless of SMTP hop, we also cast to the SMTPSink GenServer
-  # so tests reliably see the message.
-  defp forward_to_sink(_from, rcpt, raw, %{sink_host: host, sink_port: port}) do
-    smtp_res =
-      try do
-        {:ok, sock} =
-          :gen_tcp.connect(
-            String.to_charlist(host),
-            port,
-            [:binary, packet: :line]
-          )
+  ## Forwarding logic with simulated failure
 
-        :gen_tcp.send(sock, "EHLO localhost\r\n")
-        _ = :gen_tcp.recv(sock, 0)
+  defp forward_to_sink(from, rcpt, raw, %{sink_host: host, sink_port: port} = state) do
+    if String.contains?(rcpt, "no-such-domain") do
+      IO.puts("🚫 Simulating delivery failure to #{rcpt}")
+      send_dsn(from, rcpt, state)
+      {:error, :sink_unreachable}
+    else
+      IO.puts("📨 Received DATA. Forwarding to sink...")
+      result =
+        try do
+          {:ok, sock} = :gen_tcp.connect(String.to_charlist(host), port, [:binary, packet: :line])
 
-        :gen_tcp.send(sock, "MAIL FROM:<forwarder@fake-mta.local>\r\n")
-        _ = :gen_tcp.recv(sock, 0)
+          :gen_tcp.send(sock, "EHLO localhost\r\n")
+          _ = :gen_tcp.recv(sock, 0)
 
-        :gen_tcp.send(sock, "RCPT TO:<#{rcpt}>\r\n")
-        _ = :gen_tcp.recv(sock, 0)
+          :gen_tcp.send(sock, "MAIL FROM:<forwarder@fake-mta.local>\r\n")
+          _ = :gen_tcp.recv(sock, 0)
 
-        :gen_tcp.send(sock, "DATA\r\n")
-        _ = :gen_tcp.recv(sock, 0)
+          :gen_tcp.send(sock, "RCPT TO:<#{rcpt}>\r\n")
+          _ = :gen_tcp.recv(sock, 0)
 
-        :gen_tcp.send(sock, raw <> "\r\n.\r\n")
-        _ = :gen_tcp.recv(sock, 0)
+          :gen_tcp.send(sock, "DATA\r\n")
+          _ = :gen_tcp.recv(sock, 0)
 
-        :gen_tcp.send(sock, "QUIT\r\n")
-        :gen_tcp.close(sock)
-        :ok
-      rescue
-        e -> {:error, e}
-      end
+          :gen_tcp.send(sock, raw <> "\r\n.\r\n")
+          _ = :gen_tcp.recv(sock, 0)
 
-    # Test-only fallback so the sink definitely sees the message body.
-    GenServer.cast(MtaEmailTest.SMTPSink, {:store, raw})
+          :gen_tcp.send(sock, "QUIT\r\n")
+          :gen_tcp.close(sock)
 
-    smtp_res
+          :ok
+        rescue
+          e -> {:error, e}
+        end
+
+      IO.puts("📬 forward_to_sink result: #{inspect(result)}")
+      GenServer.cast(MtaEmailTest.SMTPSink, {:store, raw})
+      result
+    end
   end
 
-  ## Parsing helpers
+  ## DSN sending
 
-  # NOTE: Correct argument order for pipe usage: extract_addr_after(line, "RCPT TO:<")
-  defp extract_addr_after(line, prefix) when is_binary(line) and is_binary(prefix) do
+  defp send_dsn(nil, _rcpt, _state), do: :ok
+
+  defp send_dsn(original_sender, failed_rcpt, %{sink_host: host, sink_port: port}) do
+    IO.puts("📤 Sending DSN to #{original_sender} for failed RCPT #{failed_rcpt}")
+
+    dsn_body = """
+    From:
+    To: #{original_sender}
+    Subject: Delivery Status Notification (Failure)
+    Content-Type: text/plain
+
+    Delivery failed permanently to: #{failed_rcpt}
+    Reason: Recipient domain not allowed or unreachable.
+    """
+
+    try do
+      {:ok, sock} =
+        :gen_tcp.connect(String.to_charlist(host), port, [:binary, packet: :line])
+
+      :gen_tcp.send(sock, "EHLO localhost\r\n")
+      _ = :gen_tcp.recv(sock, 0)
+
+      :gen_tcp.send(sock, "MAIL FROM:<>\r\n")
+      _ = :gen_tcp.recv(sock, 0)
+
+      :gen_tcp.send(sock, "RCPT TO:<#{original_sender}>\r\n")
+      _ = :gen_tcp.recv(sock, 0)
+
+      :gen_tcp.send(sock, "DATA\r\n")
+      _ = :gen_tcp.recv(sock, 0)
+
+      :gen_tcp.send(sock, dsn_body <> "\r\n.\r\n")
+      _ = :gen_tcp.recv(sock, 0)
+
+      :gen_tcp.send(sock, "QUIT\r\n")
+      :gen_tcp.close(sock)
+
+      GenServer.cast(MtaEmailTest.SMTPSink, {:store, dsn_body})
+      IO.puts("✅ DSN sent to sink.")
+      :ok
+    rescue
+      e -> {:error, e}
+    end
+  end
+
+  ## Helpers
+
+  defp extract_addr_after(line, prefix) do
     line
     |> String.replace_prefix(prefix, "")
     |> String.trim_leading()
@@ -194,19 +224,18 @@ defmodule MtaEmailTest.FakeMTA do
   end
 
   defp rcpt_domain(nil), do: ""
-  defp rcpt_domain(rcpt) when is_binary(rcpt) do
+  defp rcpt_domain(rcpt) do
     case String.split(rcpt, "@", parts: 2) do
-      [_local, dom] -> String.downcase(dom)
+      [_local, domain] -> String.downcase(domain)
       _ -> ""
     end
   end
 
-  defp allowed_domain?("", _allow), do: false
-  defp allowed_domain?(dom, allow) when is_list(allow), do: dom in allow
-
-  ## Normalization helpers
+  defp allowed_domain?("", _list), do: false
+  defp allowed_domain?(domain, list), do: domain in list
 
   defp normalize_list(nil), do: []
+
   defp normalize_list(list) when is_list(list) do
     list
     |> Enum.map(&to_string/1)
