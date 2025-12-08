@@ -6,7 +6,7 @@ defmodule MtaEmailTest.SMTPSink do
 
   use GenServer
 
-  ## API
+  ## Public API
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -16,15 +16,25 @@ defmodule MtaEmailTest.SMTPSink do
     GenServer.call(__MODULE__, {:wait_for_subject, subject, timeout}, timeout + 500)
   end
 
-  ## GenServer callbacks
+  def wait_for_dsn(to_address, timeout \\ 5_000) do
+    GenServer.call(__MODULE__, {:wait_for_dsn, to_address, timeout}, timeout + 500)
+  end
+
+  def clear do
+    GenServer.cast(__MODULE__, :clear)
+  end
+
+  ## GenServer Callbacks
 
   def init(opts) do
     port = Keyword.get(opts, :port, 2626)
 
-    {:ok, socket} = :gen_tcp.listen(port, [:binary, packet: :line, active: false, reuseaddr: true])
+    {:ok, socket} =
+      :gen_tcp.listen(port, [:binary, packet: :line, active: false, reuseaddr: true])
+
     state = %{socket: socket, messages: []}
 
-    # Spawn accept loop
+    # Start accepting connections in a separate process
     Task.start_link(fn -> accept_loop(socket) end)
 
     {:ok, state}
@@ -41,7 +51,36 @@ defmodule MtaEmailTest.SMTPSink do
     {:reply, result, state}
   end
 
-  ## Internal helpers
+  def handle_call({:wait_for_dsn, to_address, timeout}, _from, state) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    result =
+      wait_until(deadline, fn ->
+        Enum.any?(state.messages, fn msg ->
+          String.contains?(msg, "To: #{to_address}") and
+            (
+              String.match?(msg, ~r/^From:\s*$/m) or
+              String.match?(msg, ~r/^From:\s*<>\s*$/m) or
+              String.contains?(msg, "Undelivered Mail Returned to Sender") or
+              String.contains?(msg, "delivery status notification") or
+              String.contains?(msg, "This is the mail system at host") or
+              String.contains?(msg, "550")
+            )
+        end)
+      end)
+
+    {:reply, result, state}
+  end
+
+  def handle_cast({:store, msg}, state) do
+    {:noreply, %{state | messages: [msg | state.messages]}}
+  end
+
+  def handle_cast(:clear, state) do
+    {:noreply, %{state | messages: []}}
+  end
+
+  ## Internal Helpers
 
   defp accept_loop(socket) do
     {:ok, client} = :gen_tcp.accept(socket)
@@ -70,7 +109,8 @@ defmodule MtaEmailTest.SMTPSink do
             handle_smtp_session(client, acc <> data)
         end
 
-      {:error, _} -> :ok
+      {:error, _} ->
+        :ok
     end
   end
 
@@ -80,10 +120,6 @@ defmodule MtaEmailTest.SMTPSink do
       {:ok, data} -> recv_data(client, acc <> data)
       {:error, _} -> {:ok, acc}
     end
-  end
-
-  def handle_cast({:store, msg}, state) do
-    {:noreply, %{state | messages: [msg | state.messages]}}
   end
 
   defp wait_until(deadline, fun) do
