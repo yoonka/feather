@@ -31,19 +31,33 @@ defmodule Feather.Session do
   @impl true
   def handle_EHLO(_domain, extensions, state) do
     opts = state.opts || %{}
-    tls? = opts[:tls] in [:always, :if_available]
+    tls_mode = opts[:tls]
+    tls_active? = Map.get(state, :tls_active, false)
     max_size = opts[:max_size] || 10_485_760  # 10MB default
 
+    # Base extensions available in all modes
     smtp_extensions = [
       {~c"SIZE", ~c"#{max_size}"},
       {~c"PIPELINING", true},
       {~c"8BITMIME", true},
-      {~c"ENHANCEDSTATUSCODES", true},
-      {~c"AUTH", ~c"PLAIN LOGIN"}
+      {~c"ENHANCEDSTATUSCODES", true}
     ]
 
+    # Only advertise AUTH when connection is secure:
+    # - After STARTTLS has been negotiated (tls_active? = true)
+    # - OR when using implicit TLS (tls_mode = :always)
     smtp_extensions =
-      if tls? do
+      if tls_active? or tls_mode == :always do
+        [{~c"AUTH", ~c"PLAIN LOGIN"} | smtp_extensions]
+      else
+        smtp_extensions
+      end
+
+    # Only advertise STARTTLS when:
+    # - TLS is available (tls_mode = :if_available)
+    # - AND TLS is not yet active (tls_active? = false)
+    smtp_extensions =
+      if tls_mode == :if_available and not tls_active? do
         [{~c"STARTTLS", true} | smtp_extensions]
       else
         smtp_extensions
@@ -110,7 +124,10 @@ defmodule Feather.Session do
   def handle_RSET(state), do: {:ok, state}
 
   @impl true
-  def handle_STARTTLS(state), do: {:ok, state}
+  def handle_STARTTLS(state) do
+    # Mark TLS as active in state to control AUTH advertisement
+    {:ok, Map.put(state, :tls_active, true)}
+  end
 
   @impl true
   def handle_VRFY(_address, state), do: {:ok, ~c"252 Not supported", state}
