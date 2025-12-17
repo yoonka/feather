@@ -94,6 +94,7 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   # ---------- Core signing ----------
 
   defp sign_message(raw, dkim_opts) do
+    Logger.info("DKIM: Signing message with opts: #{inspect(dkim_opts)} and raw: #{inspect(raw)}")
     case :mimemail.decode(raw) do
       {type, subtype, headers, params, body} ->
         :mimemail.encode(
