@@ -66,8 +66,8 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
 
   defp base_opts(selector, domain, pem, algorithm) do
     opts = [
-      s: to_charlist(selector),
-      d: to_charlist(domain),
+      s: selector,
+      d: domain,
       private_key: {:pem_plain, pem}
     ]
 
