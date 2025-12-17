@@ -1,7 +1,7 @@
 defmodule FeatherAdapters.Transformers.DKIMSigner do
   @moduledoc """
   Signs outgoing emails with DKIM using gen_smtp's mimemail encoder.
-  This transformer should be applied to your forwarder adapter.
+    This transformer should be applied to your forwarder adapter.
 
   ## Options
 
@@ -36,41 +36,49 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
 
   require Logger
 
+  # ---------- Public entry ----------
+
   def transform_data(raw, meta, _state, opts) do
-    selector = Keyword.fetch!(opts, :selector)
-    domain = Keyword.fetch!(opts, :domain)
-    key_path = Keyword.fetch!(opts, :private_key)
+    selector  = Keyword.fetch!(opts, :selector)
+    domain    = Keyword.fetch!(opts, :domain)
+    key_path  = Keyword.fetch!(opts, :private_key)
     algorithm = Keyword.get(opts, :algorithm, :rsa_sha256)
     encrypted = Keyword.get(opts, :encrypted)
 
-    case File.read(key_path) do
-      {:ok, pem} ->
-        dkim_opts = build_dkim_opts(selector, domain, pem, algorithm, encrypted)
-        signed = sign_message(raw, dkim_opts)
-        {signed, meta}
+    with {:ok, pem} <- File.read(key_path) do
+      dkim_opts =
+        build_dkim_opts(
+          bin!(selector),
+          bin!(domain),
+          pem,
+          algorithm,
+          encrypted
+        )
 
+      signed = sign_message(raw, dkim_opts)
+      {signed, meta}
+    else
       {:error, reason} ->
         Logger.error("DKIM: Failed to read private key #{key_path}: #{inspect(reason)}")
         {raw, meta}
     end
   end
 
+  # ---------- DKIM options ----------
+
   defp build_dkim_opts(selector, domain, pem, algorithm, nil) do
     base_opts(selector, domain, pem, algorithm)
   end
 
   defp build_dkim_opts(selector, domain, pem, algorithm, password) do
-    opts = base_opts(selector, domain, pem, algorithm)
-    Keyword.put(opts, :private_key, {:pem_encrypted, pem, password})
+    base_opts(selector, domain, pem, algorithm)
+    |> Keyword.put(:private_key, {:pem_encrypted, pem, password})
   end
 
   defp base_opts(selector, domain, pem, algorithm) do
-    s = :erlang.iolist_to_binary(selector)
-    d = :erlang.iolist_to_binary(domain)
-
     opts = [
-      {:s, s},
-      {:d, d},
+      {:s, selector},
+      {:d, domain},
       {:private_key, {:pem_plain, pem}}
     ]
 
@@ -83,23 +91,23 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
     end
   end
 
+  # ---------- Core signing ----------
+
   defp sign_message(raw, dkim_opts) do
     case :mimemail.decode(raw) do
       {type, subtype, headers, params, body} ->
         headers =
-          Enum.map(headers, fn
-            {k, v} ->
-              key = to_string(k)
-
-              value =
-                v
-                |> to_string()
-                |> String.replace_leading("#{key}: ", "") # strip "From: " etc if present
-
-              {key, value}
+          Enum.map(headers, fn {k, v} ->
+            {
+              header_key(k),
+              header_value(v)
+            }
           end)
 
-        :mimemail.encode({type, subtype, headers, params, body}, [dkim: dkim_opts])
+        :mimemail.encode(
+          {type, subtype, headers, params, body},
+          [dkim: dkim_opts]
+        )
 
       _ ->
         Logger.warning("DKIM: Could not decode message for signing")
@@ -111,4 +119,31 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
       raw
   end
 
+  # ---------- Normalization helpers ----------
+
+  # Convert ANYTHING to binary safely
+  defp bin!(v) when is_binary(v), do: v
+  defp bin!(v), do: :erlang.iolist_to_binary(v)
+
+  # Header key MUST be binary without colon
+  defp header_key(k) do
+    k
+    |> bin!()
+    |> String.downcase()
+  end
+
+  # Header value MUST be binary WITHOUT "Key: "
+  # Folded headers are preserved correctly
+  defp header_value(v) do
+    v
+    |> bin!()
+    |> strip_header_prefix()
+  end
+
+  defp strip_header_prefix(value) do
+    case String.split(value, ":", parts: 2) do
+      [_key, rest] -> String.trim_leading(rest)
+      _ -> value
+    end
+  end
 end
