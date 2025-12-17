@@ -65,15 +65,21 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   end
 
   defp base_opts(selector, domain, pem, algorithm) do
+    s = :erlang.iolist_to_binary(selector)
+    d = :erlang.iolist_to_binary(domain)
+
     opts = [
-      s: to_string(selector),
-      d: to_string(domain),
-      private_key: {:pem_plain, pem}
+      {:s, s},
+      {:d, d},
+      {:private_key, {:pem_plain, pem}}
     ]
 
     case algorithm do
-      :ed25519_sha256 -> [{:a, :"ed25519-sha256"} | opts]
-      _ -> opts
+      :ed25519_sha256 ->
+        [{:a, :"ed25519-sha256"} | opts]
+
+      _ ->
+        opts
     end
   end
 
