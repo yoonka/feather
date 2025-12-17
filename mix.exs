@@ -110,6 +110,7 @@ defmodule FeatherMail.MixProject do
       {:bcrypt_elixir, "~> 3.3.0"},
       {:briefly, "~> 0.5.0"},
       {:gen_smtp, "~> 1.3.0"},
+      {:iconv, "~> 1.0"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true},
       {:file_system, "~> 1.1"}
     ]
