@@ -80,6 +80,19 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   defp sign_message(raw, dkim_opts) do
     case :mimemail.decode(raw) do
       {type, subtype, headers, params, body} ->
+        headers =
+          Enum.map(headers, fn
+            {k, v} ->
+              key = to_string(k)
+
+              value =
+                v
+                |> to_string()
+                |> String.replace_leading("#{key}: ", "") # strip "From: " etc if present
+
+              {key, value}
+          end)
+
         :mimemail.encode({type, subtype, headers, params, body}, [dkim: dkim_opts])
 
       _ ->
@@ -91,4 +104,5 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
       Logger.error("DKIM: Signing failed: #{inspect(e)}")
       raw
   end
+
 end
