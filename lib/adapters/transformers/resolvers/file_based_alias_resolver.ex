@@ -41,7 +41,7 @@ defmodule FeatherAdapters.Transformers.FileBasedAliasResolver do
       dev-team: alice, bob, charlie
   """
 
-  require Logger
+  alias Feather.Logger
 
   @default_alias_file "/etc/aliases"
   @default_reload_interval 60

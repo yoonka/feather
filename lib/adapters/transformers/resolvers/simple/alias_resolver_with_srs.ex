@@ -37,7 +37,7 @@ defmodule FeatherAdapters.Transformers.Simple.AliasResolverWithSRS do
       # Gmail checks SPF against mta.maxlabmobile.com → PASS ✅
   """
 
-  require Logger
+  alias Feather.Logger
 
   @max_depth 10
 

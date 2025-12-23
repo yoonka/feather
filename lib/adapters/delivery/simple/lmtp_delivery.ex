@@ -82,7 +82,7 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   @behaviour FeatherAdapters.Adapter
   @recipient_delimiter "+"
 
-  require Logger
+  alias Feather.Logger
   use FeatherAdapters.Transformers.Transformable
 
   @impl true

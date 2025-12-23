@@ -23,7 +23,7 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
 
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
-  require Logger
+  alias Feather.Logger
 
   @impl true
   def init_session(opts) do

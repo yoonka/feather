@@ -29,7 +29,7 @@ defmodule FeatherAdapters.Transformers.SRSBounceHandler do
     * `:max_age_days` - Reject bounces older than this (default: 21)
   """
 
-  require Logger
+  alias Feather.Logger
 
   @default_max_age 21  # days
 

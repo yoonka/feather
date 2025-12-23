@@ -73,7 +73,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
 
 
   @behaviour FeatherAdapters.Adapter
-  require Logger
+  alias Feather.Logger
 
   @impl true
   def init_session(opts) do

@@ -28,7 +28,7 @@ defmodule FeatherAdapters.Transformers.SRSRewriter do
     - Leaves sender unchanged
   """
 
-  require Logger
+  alias Feather.Logger
 
   def transform(%{to: recipients, from: original_from} = meta, opts) do
     srs_domain = Keyword.fetch!(opts, :srs_domain)

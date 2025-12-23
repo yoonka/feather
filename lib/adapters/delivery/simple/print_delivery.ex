@@ -7,7 +7,7 @@ defmodule FeatherAdapters.Delivery.ConsolePrintDelivery do
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
 
-  require Logger
+  alias Feather.Logger
 
   @impl true
   def init_session(_opts) do

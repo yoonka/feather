@@ -11,7 +11,7 @@ defmodule Feather.ConfigLoader do
   """
 
   use GenServer
-  require Logger
+  alias Feather.Logger
 
   @server_file "server.exs"
   @pipeline_file "pipeline.exs"

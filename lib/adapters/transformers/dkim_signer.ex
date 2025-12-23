@@ -34,7 +34,7 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   It should be placed late in the pipeline, after any body modifications.
   """
 
-  require Logger
+  alias Feather.Logger
 
   # ---------- Public entry ----------
 

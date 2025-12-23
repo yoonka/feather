@@ -1,5 +1,5 @@
 defmodule Feather.FeatherMailServer do
-  require Logger
+  alias Feather.Logger
 
   def start do
     options = Application.get_env(:feather, :smtp_server)
