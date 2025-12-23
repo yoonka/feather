@@ -164,7 +164,13 @@ defmodule Feather.Logger do
   end
 
   defp write_to_backend({:file, opts}, level, message) do
-    Feather.Logger.Backends.File.log(level, message, opts)
+    IO.inspect(message, label: "Writing to file: #{opts[:path]}")
+    case File.mkdir_p(Path.dirname(opts[:path])) do
+      :ok ->
+        Feather.Logger.Backends.File.log(level, message, opts)
+      {:error, reason} ->
+        Logger.error("Failed to create directory for log file: #{opts[:path]}: #{inspect(reason)}")
+    end
   end
 
   defp write_to_backend({:syslog, opts}, level, message) do

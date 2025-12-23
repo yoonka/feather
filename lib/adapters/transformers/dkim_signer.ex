@@ -64,13 +64,13 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
 
   defp build_dkim_opts(selector, domain, pem, algorithm, password) do
     base_opts(selector, domain, pem, algorithm)
-    |> Keyword.put(:private_key, {:pem_encrypted, pem, ensure_charlist(password)})
+    |> Keyword.put(:private_key, {:pem_encrypted, pem, password})
   end
 
   defp base_opts(selector, domain, pem, algorithm) do
     opts = [
-      {:s, ensure_charlist(selector)},
-      {:d, ensure_charlist(domain)},
+      {:s, selector},
+      {:d, domain},
       {:private_key, {:pem_plain, pem}}
     ]
 
@@ -87,15 +87,17 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
 
   defp sign_message(raw, dkim_opts) do
     case :mimemail.decode(raw) do
-      {type, subtype, headers, params, body} ->
-        IO.inspect(subtype, label: "DKIM decode subtype")
-        IO.inspect(headers, label: "DKIM headers")
-        IO.inspect(params, label: "DKIM params")
-        IO.inspect(body, label: "DKIM body")
-        :mimemail.encode(
-          {type, subtype, headers, params, body},
-          [dkim: dkim_opts]
-        )
+      {type, subtype, headers, params, body} = decoded ->
+        Logger.debug("DKIM decode type: #{inspect(type)}")
+        Logger.debug("DKIM decode subtype: #{inspect(subtype)}")
+        Logger.debug("DKIM headers: #{inspect(headers)}")
+        Logger.debug("DKIM params: #{inspect(params)}")
+        Logger.debug("DKIM body: #{inspect(body)}")
+
+        # ADD THIS - see exactly what we're passing
+        IO.inspect(dkim_opts, label: "DKIM_OPTS")
+
+        :mimemail.encode(decoded, [dkim: dkim_opts])
 
       _ ->
         Logger.warning("DKIM: Could not decode message for signing")
@@ -107,10 +109,5 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
       raw
   end
 
-  # ---------- Type conversion helpers ----------
 
-  # gen_smtp's mimemail expects Erlang strings (charlists) for DKIM tag values
-  defp ensure_charlist(v) when is_list(v), do: v
-  defp ensure_charlist(v) when is_binary(v), do: String.to_charlist(v)
-  defp ensure_charlist(v) when is_atom(v), do: Atom.to_charlist(v)
 end
