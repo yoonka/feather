@@ -88,6 +88,10 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   defp sign_message(raw, dkim_opts) do
     case :mimemail.decode(raw) do
       {type, subtype, headers, params, body} ->
+        IO.inspect(subtype, label: "DKIM decode subtype")
+        IO.inspect(headers, label: "DKIM headers")
+        IO.inspect(params, label: "DKIM params")
+        IO.inspect(body, label: "DKIM body")
         :mimemail.encode(
           {type, subtype, headers, params, body},
           [dkim: dkim_opts]
