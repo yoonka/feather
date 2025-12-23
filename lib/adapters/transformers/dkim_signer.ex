@@ -46,15 +46,7 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
     encrypted = Keyword.get(opts, :encrypted)
 
     with {:ok, pem} <- File.read(key_path) do
-      dkim_opts =
-        build_dkim_opts(
-          bin!(selector),
-          bin!(domain),
-          pem,
-          algorithm,
-          encrypted
-        )
-
+      dkim_opts = build_dkim_opts(selector, domain, pem, algorithm, encrypted)
       signed = sign_message(raw, dkim_opts)
       {signed, meta}
     else
@@ -72,13 +64,13 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
 
   defp build_dkim_opts(selector, domain, pem, algorithm, password) do
     base_opts(selector, domain, pem, algorithm)
-    |> Keyword.put(:private_key, {:pem_encrypted, pem, password})
+    |> Keyword.put(:private_key, {:pem_encrypted, pem, ensure_charlist(password)})
   end
 
   defp base_opts(selector, domain, pem, algorithm) do
     opts = [
-      {:s, selector},
-      {:d, domain},
+      {:s, ensure_charlist(selector)},
+      {:d, ensure_charlist(domain)},
       {:private_key, {:pem_plain, pem}}
     ]
 
@@ -94,7 +86,6 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   # ---------- Core signing ----------
 
   defp sign_message(raw, dkim_opts) do
-    Logger.info("DKIM: Signing message with opts: #{inspect(dkim_opts)} and raw: #{inspect(raw)}")
     case :mimemail.decode(raw) do
       {type, subtype, headers, params, body} ->
         :mimemail.encode(
@@ -112,11 +103,10 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
       raw
   end
 
-  # ---------- Normalization helpers ----------
+  # ---------- Type conversion helpers ----------
 
-  # Convert ANYTHING to binary safely
-  defp bin!(v) when is_binary(v), do: v
-  defp bin!(v), do: :erlang.iolist_to_binary(v)
-
-
+  # gen_smtp's mimemail expects Erlang strings (charlists) for DKIM tag values
+  defp ensure_charlist(v) when is_list(v), do: v
+  defp ensure_charlist(v) when is_binary(v), do: String.to_charlist(v)
+  defp ensure_charlist(v) when is_atom(v), do: Atom.to_charlist(v)
 end
