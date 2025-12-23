@@ -133,7 +133,7 @@ defmodule Feather.Session do
   def handle_VRFY(_address, state), do: {:ok, ~c"252 Not supported", state}
 
   @impl true
-  def handle_other(cmd, args, state) do
+  def handle_other(_cmd, _args, state) do
     {:noreply, state}
   end
 

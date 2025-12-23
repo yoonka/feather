@@ -118,25 +118,5 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   defp bin!(v) when is_binary(v), do: v
   defp bin!(v), do: :erlang.iolist_to_binary(v)
 
-  # Header key MUST be binary without colon
-  defp header_key(k) do
-    k
-    |> bin!()
-    |> String.downcase()
-  end
 
-  # Header value MUST be binary WITHOUT "Key: "
-  # Folded headers are preserved correctly
-  defp header_value(v) do
-    v
-    |> bin!()
-    |> strip_header_prefix()
-  end
-
-  defp strip_header_prefix(value) do
-    case String.split(value, ":", parts: 2) do
-      [_key, rest] -> String.trim_leading(rest)
-      _ -> value
-    end
-  end
 end

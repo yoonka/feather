@@ -104,7 +104,7 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
     |> first_error_or_ok()
   end
 
-  defp deliver(raw, recipients, %{rcfile: rcfile, batch: false} = st) do
+  defp deliver(raw, recipients, %{rcfile: _rcfile, batch: false} = st) do
     # Rcfile once per recipient (export RCPT for recipes if useful)
     recipients
     |> Enum.map(&deliver_one_per_user(&1, raw, st))

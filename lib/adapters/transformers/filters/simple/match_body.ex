@@ -27,11 +27,4 @@ defmodule FeatherAdapters.Transformers.Simple.MatchBody do
     end
   end
 
-  # Simplistic body extraction for RFC 5322 (no MIME support yet)
-  defp extract_body(raw) do
-    [_headers, body] = String.split(raw, ~r/\r\n\r\n/, parts: 2, trim: true)
-    body
-  rescue
-    _ -> ""
-  end
 end

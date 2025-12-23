@@ -123,9 +123,7 @@ defmodule Feather.ConfigLoader do
       {:ok, pid} ->
         case FileSystem.subscribe(pid) do
           :ok -> :ok
-          {:error, reason} ->
-            Logger.error("Failed to subscribe to config file watcher: #{inspect(reason)}")
-            raise "Failed to subscribe to config file watcher"
+
         end
 
       _ ->
