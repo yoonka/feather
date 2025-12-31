@@ -45,8 +45,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Feather ${{ github.ref_name }}
-          body: Automated release for Feather ${{ github.ref_name }}
+          name: Feather Mail ${{ github.ref_name }}
+          body: Automated release for Feather Mail ${{ github.ref_name }}
           files: |
             feather.tar.gz
             feather_docs.tar.gz
