@@ -45,6 +45,8 @@ defmodule FeatherMail.MixProject do
           "guides/adapters/authentication/simple_auth.md"
         ],
         "📦 Adapters · Access Control": [
+          "guides/adapters/access/ip_filter.md",
+          "guides/adapters/access/relay_control.md",
           "guides/adapters/access/simple_access.md"
         ],
         "📦 Adapters · Routing": [
@@ -80,7 +82,11 @@ defmodule FeatherMail.MixProject do
           FeatherAdapters.Auth.SimpleAuth
         ],
         "🔒 Access Adapters": [
-          FeatherAdapters.Access.SimpleAccess
+          FeatherAdapters.Access.IPFilter,
+          FeatherAdapters.Access.RelayControl,
+          FeatherAdapters.Access.SimpleAccess,
+          FeatherAdapters.Access.SenderDomainValidator,
+          FeatherAdapters.Access.BackscatterGuard
         ],
         "🗺️ Routing Adapters": [
           FeatherAdapters.Routing.ByDomain
