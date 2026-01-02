@@ -11,7 +11,7 @@ defmodule FeatherMail.MixProject do
       releases: [
         feather: [
           include_executables_for: [:unix],
-          steps: [:assemble, &copy_rc_script/1]
+          steps: [:assemble]
         ]
       ]
     ]
@@ -147,13 +147,5 @@ defmodule FeatherMail.MixProject do
       {:error, _reason} ->
         acc
     end
-  end
-
-  defp copy_rc_script(release) do
-    rel_root = release.path
-    File.mkdir_p!(Path.join(rel_root, "rc.d"))
-    File.cp!("rel/rc.d/feather", Path.join(rel_root, "rc.d/feather"))
-    File.chmod!(Path.join(rel_root, "rc.d/feather"), 0o755)
-    release
   end
 end
