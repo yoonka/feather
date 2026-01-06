@@ -24,7 +24,7 @@ jobs:
       - name: Create release tarball
         run: |
           cd _build/prod/rel/feather
-          tar -czf ${{ github.workspace }}/feather-linux-amd64.tar.gz .
+          tar -czf $GITHUB_WORKSPACE/feather-linux-amd64.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
@@ -51,7 +51,7 @@ jobs:
             mix compile
             MIX_ENV=prod mix release
             cd _build/prod/rel/feather
-            tar -czf /home/runner/work/feather-freebsd-amd64.tar.gz .
+            tar -czf $GITHUB_WORKSPACE/feather-freebsd-amd64.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
@@ -75,7 +75,7 @@ jobs:
       - name: Create docs tarball
         run: |
           cd doc
-          tar -czf ${{ github.workspace }}/feather_docs.tar.gz .
+          tar -czf $GITHUB_WORKSPACE/feather_docs.tar.gz .
 
       - uses: actions/upload-artifact@v4
         with:
