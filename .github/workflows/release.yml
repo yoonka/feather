@@ -6,49 +6,98 @@ on:
       - '*'
 
 jobs:
-  release:
-    name: Create Release
+  build-linux:
+    name: Build Linux Release
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Elixir
-        uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@v1
         with:
           elixir-version: '1.18'
           otp-version: '27'
 
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Compile project
-        run: mix compile
-
-      - name: Build release
-        run: MIX_ENV=prod mix release
+      - run: mix deps.get
+      - run: mix compile
+      - run: MIX_ENV=prod mix release
 
       - name: Create release tarball
         run: |
           cd _build/prod/rel/feather
-          tar -czf ${{ github.workspace }}/feather.tar.gz .
+          tar -czf ${{ github.workspace }}/feather-linux-amd64.tar.gz .
 
-      - name: Generate documentation
-        run: mix docs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: feather-linux-amd64.tar.gz
+
+  build-freebsd:
+    name: Build FreeBSD Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: '14.1'
+          usesh: true
+          prepare: |
+            pkg install -y elixir erlang git
+          run: |
+            mix local.hex --force
+            mix local.rebar --force
+            mix deps.get
+            mix compile
+            MIX_ENV=prod mix release
+            cd _build/prod/rel/feather
+            tar -czf /home/runner/work/feather-freebsd-amd64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freebsd-release
+          path: feather-freebsd-amd64.tar.gz
+
+  build-docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18'
+          otp-version: '27'
+
+      - run: mix deps.get
+      - run: mix docs
 
       - name: Create docs tarball
         run: |
           cd doc
           tar -czf ${{ github.workspace }}/feather_docs.tar.gz .
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: feather_docs.tar.gz
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-freebsd, build-docs]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
         with:
           name: Feather Mail ${{ github.ref_name }}
           body: Automated release for Feather Mail ${{ github.ref_name }}
           files: |
-            feather.tar.gz
+            feather-linux-amd64.tar.gz
+            feather-freebsd-amd64.tar.gz
             feather_docs.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
