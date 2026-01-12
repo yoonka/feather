@@ -82,7 +82,10 @@ defmodule FeatherAdapters.Auth.PamAuth do
   def auth({username, password}, meta, %{binary_path: bin} = state) do
     case System.cmd(bin, [username, password], stderr_to_stdout: true) do
       {_, 0} ->
-        {:ok, Map.put(meta, :authenticated, true), state}
+        updated_meta = meta
+        |> Map.put(:user, username)
+        |> Map.put(:authenticated, true)
+        {:ok, updated_meta, state}
 
       {output, exit_code} ->
         {:halt, {:auth_failed, String.trim(output), exit_code}, state}

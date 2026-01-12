@@ -54,8 +54,12 @@ defmodule FeatherAdapters.Auth.NoAuth do
 
   @impl true
   def auth({_username, _password}, meta, state) do
-    # Just mark session as authenticated with a fake user.
-    {:ok, Map.put(meta, :user, state.user), state}
+    # Mark session as authenticated with a fake user
+    updated_meta = meta
+    |> Map.put(:user, state.user)
+    |> Map.put(:authenticated, true)
+
+    {:ok, updated_meta, state}
   end
 
   @impl true
