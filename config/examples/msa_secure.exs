@@ -72,9 +72,8 @@ pipeline = [
 # SECURITY NOTES:
 #
 # 1. Authentication is enforced BY THE AUTH ADAPTER:
-#    - PamAuth: Requires authentication at MAIL FROM time (secure MSA)
-#    - NoAuth: Bypasses authentication (explicit open relay)
-#    - No auth adapter: No authentication enforcement (for internal MTAs)
+#    - With PamAuth: Authentication required (secure MSA)
+#    - Without auth adapter: No authentication enforcement (open relay/MTA)
 #
 # 2. How PamAuth works:
 #    - Handles AUTH command when client authenticates
@@ -82,10 +81,9 @@ pipeline = [
 #    - At MAIL FROM time, checks if session is authenticated
 #    - Rejects with "530 Authentication required" if not authenticated
 #
-# 3. To create an OPEN RELAY (explicit opt-in):
-#    Replace PamAuth with:
-#    {FeatherAdapters.Auth.NoAuth, []}
-#    This marks all sessions as authenticated (bypasses enforcement)
+# 3. To create an OPEN RELAY:
+#    Simply omit the auth adapter from your pipeline
+#    (Only do this for internal MTAs with proper access controls)
 #
 # 4. The pipeline order matters:
 #    - Auth adapters FIRST (handle AUTH + enforce at MAIL FROM)
