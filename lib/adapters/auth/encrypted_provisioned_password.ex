@@ -88,6 +88,7 @@ defmodule FeatherAdapters.Auth.EncryptedProvisionedPassword do
 
   """
 
+  use FeatherAdapters.Auth.Helpers
   @behaviour FeatherAdapters.Adapter
 
   @type state :: %{
@@ -127,7 +128,12 @@ defmodule FeatherAdapters.Auth.EncryptedProvisionedPassword do
     with %{"hashed_password" => hash} <- Map.get(users, username),
          {:ok, password} <- decrypt(encrypted_blob, key),
          true <- Bcrypt.verify_pass(password, hash) do
-      {:ok, Map.put(meta, :user, username), state}
+      updated_meta =
+        meta
+        |> Map.put(:user, username)
+        |> Map.put(:authenticated, true)
+
+      {:ok, updated_meta, state}
     else
       _ -> {:halt, :invalid_credentials, state}
     end
@@ -135,7 +141,7 @@ defmodule FeatherAdapters.Auth.EncryptedProvisionedPassword do
 
   @impl true
   def format_reason(:invalid_credentials), do: "535 Authentication failed"
-  def format_reason(_), do: nil
+  def format_reason(reason), do: super(reason)
 
   # ─────────────────────────────
   # 🚀 Provisioning Logic

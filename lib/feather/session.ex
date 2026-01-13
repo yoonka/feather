@@ -87,23 +87,7 @@ defmodule Feather.Session do
   end
 
   @impl true
-  def handle_MAIL(from, %{meta: meta} = state) do
-    # Enforce authentication requirement: sessions must be authenticated before sending mail
-    # Auth adapters (PamAuth, NoAuth, etc.) set meta.authenticated or meta.user
-    cond do
-      # Check if authenticated via meta.authenticated flag
-      Map.get(meta, :authenticated, false) ->
-        step(:mail, from, state)
-
-      # Check if authenticated via meta.user presence
-      Map.has_key?(meta, :user) ->
-        step(:mail, from, state)
-
-      # Otherwise reject - authentication required
-      true ->
-        {:error, "530 5.7.0 Authentication required", state}
-    end
-  end
+  def handle_MAIL(from, state), do: step(:mail, from, state)
 
   @impl :gen_smtp_server_session
   def handle_MAIL_extension(_extension, _state) do

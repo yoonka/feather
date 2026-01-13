@@ -1,17 +1,21 @@
 defmodule FeatherAdapters.Auth.NoAuth do
   @moduledoc """
-  An authentication adapter that **disables authentication entirely**.
+  An authentication adapter that **accepts all sessions as authenticated** (explicit open relay).
 
-  This adapter **accepts all authentication attempts unconditionally** and marks the session
-  as authenticated with a placeholder or configured user. It is intended only for **trusted or internal environments**.
+  This adapter **bypasses authentication entirely** by marking all sessions as authenticated
+  with a placeholder user. This is an **explicit opt-in** for open relay behavior.
 
-  ## Use Cases
+  ## ⚠️ Security Warning
 
-  - Internal SMTP relays or staging/test pipelines
+  By using this adapter, you are **explicitly creating an open relay**. Your server will accept
+  mail from anyone without authentication. Only use this in:
+
+  - Internal SMTP relays behind strict firewall rules
   - Air-gapped or VPN-protected environments
-  - Developer/local testing where SMTP AUTH is not needed
+  - Development/testing environments
+  - MTAs that accept mail for local domains only (with proper access controls)
 
-  ⚠️ **Do not use in any public-facing or untrusted deployment.**
+  **Do not use in public-facing MSA deployments.**
 
   ## Behavior
 
@@ -64,8 +68,13 @@ defmodule FeatherAdapters.Auth.NoAuth do
 
   @impl true
   def helo(_helo, meta, state), do: {:ok, meta, state}
+
   @impl true
-  def mail(_from, meta, state), do: {:ok, meta, state}
+  def mail(_from, meta, state) do
+    # NoAuth always allows mail - everyone is considered authenticated
+    {:ok, meta, state}
+  end
+
   @impl true
   def rcpt(_to, meta, state), do: {:ok, meta, state}
   @impl true

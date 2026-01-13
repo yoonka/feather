@@ -27,8 +27,10 @@ pipeline = [
    log_body: false},
 
   # 2. Authentication - Validate user credentials via PAM
-  #    This handles the AUTH command and sets meta.user + meta.authenticated
-  #    The core Feather.Session enforces authentication at MAIL FROM time
+  #    This adapter:
+  #    - Handles AUTH command and validates credentials
+  #    - Sets meta.user + meta.authenticated on success
+  #    - Enforces authentication at MAIL FROM time (530 if not authenticated)
   {FeatherAdapters.Auth.PamAuth, []},
 
   # 3. Rate Limiting - Prevent abuse (OPTIONAL but recommended)
@@ -69,27 +71,28 @@ pipeline = [
 
 # SECURITY NOTES:
 #
-# 1. Authentication is REQUIRED by default at the framework level:
-#    - Feather.Session enforces authentication at MAIL FROM time
-#    - Clients MUST authenticate before sending mail
-#    - No adapter configuration needed - it's built-in
+# 1. Authentication is enforced BY THE AUTH ADAPTER:
+#    - PamAuth: Requires authentication at MAIL FROM time (secure MSA)
+#    - NoAuth: Bypasses authentication (explicit open relay)
+#    - No auth adapter: No authentication enforcement (for internal MTAs)
 #
-# 2. Auth adapters determine HOW to authenticate:
-#    - PamAuth: Validate against system accounts via PAM
-#    - NoAuth: Accept all sessions (explicit open relay)
-#    - Custom: Implement your own authentication logic
+# 2. How PamAuth works:
+#    - Handles AUTH command when client authenticates
+#    - Sets meta.user and meta.authenticated on success
+#    - At MAIL FROM time, checks if session is authenticated
+#    - Rejects with "530 Authentication required" if not authenticated
 #
 # 3. To create an OPEN RELAY (explicit opt-in):
 #    Replace PamAuth with:
 #    {FeatherAdapters.Auth.NoAuth, []}
-#    This marks all sessions as authenticated, bypassing the requirement
+#    This marks all sessions as authenticated (bypasses enforcement)
 #
 # 4. The pipeline order matters:
-#    - Auth adapters FIRST (handle AUTH command, set meta.authenticated)
+#    - Auth adapters FIRST (handle AUTH + enforce at MAIL FROM)
 #    - RelayControl SECOND (validate relay rules at RCPT TO)
 #    - Routing LAST (forward authenticated mail)
 #
 # 5. Defense in depth:
-#    - Feather.Session: Enforces auth at MAIL FROM (built-in)
-#    - RelayControl: Validates relay rules at RCPT TO (adapter)
+#    - PamAuth: Enforces auth at MAIL FROM time
+#    - RelayControl: Validates relay rules at RCPT TO time
 #    - Two layers of protection prevent misconfigurations

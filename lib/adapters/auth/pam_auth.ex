@@ -61,6 +61,7 @@ defmodule FeatherAdapters.Auth.PamAuth do
 
   """
 
+  use FeatherAdapters.Auth.Helpers
   @behaviour FeatherAdapters.Adapter
 
   @impl true
@@ -93,8 +94,11 @@ defmodule FeatherAdapters.Auth.PamAuth do
   end
 
   @impl true
-  def format_reason({:auth_failed, message, _code}), do: "535 Authentication failed: #{message}"
-  def format_reason(reason), do: inspect(reason)
+  def format_reason({:auth_failed, message, _code}),
+    do: "535 Authentication failed: #{message}"
+
+  def format_reason(reason),
+    do: super(reason) || inspect(reason)
 
   @impl true
   def terminate(_reason, _meta, _state), do: :ok
