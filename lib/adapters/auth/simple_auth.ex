@@ -49,6 +49,7 @@ defmodule FeatherAdapters.Auth.SimpleAuth do
   - Long-lived deployments without rotating secrets
   """
 
+  use FeatherAdapters.Auth.Helpers
   @behaviour FeatherAdapters.Adapter
 
   @type state :: %{users: %{String.t() => String.t()}}
@@ -77,7 +78,12 @@ defmodule FeatherAdapters.Auth.SimpleAuth do
   def auth({username, password}, meta, %{users: users} = state) do
     case Map.fetch(users, username) do
       {:ok, ^password} ->
-        {:ok, Map.put(meta, :user, username), state}
+        updated_meta =
+          meta
+          |> Map.put(:user, username)
+          |> Map.put(:authenticated, true)
+
+        {:ok, updated_meta, state}
 
       _ ->
         {:halt, :invalid_credentials, state}
@@ -86,5 +92,5 @@ defmodule FeatherAdapters.Auth.SimpleAuth do
 
   @impl true
   def format_reason(:invalid_credentials), do: "535 Authentication failed"
-  def format_reason(_), do: nil
+  def format_reason(reason), do: super(reason)
 end

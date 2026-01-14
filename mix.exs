@@ -41,7 +41,6 @@ defmodule FeatherMail.MixProject do
         "📦 Adapters · Authentication": [
           "guides/adapters/authentication/encrypted_provisioned_password.md",
           "guides/adapters/authentication/pam_auth.md",
-          "guides/adapters/authentication/no_auth.md",
           "guides/adapters/authentication/simple_auth.md"
         ],
         "📦 Adapters · Access Control": [
@@ -77,7 +76,6 @@ defmodule FeatherMail.MixProject do
         ],
         "🔐 Authentication Adapters": [
           FeatherAdapters.Auth.EncryptedProvisionedPassword,
-          FeatherAdapters.Auth.NoAuth,
           FeatherAdapters.Auth.PamAuth,
           FeatherAdapters.Auth.SimpleAuth
         ],

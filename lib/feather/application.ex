@@ -12,7 +12,7 @@ alias Feather.PipelineManager
 
 
     children = [
-
+      {Feather.Storage, []},
       {PipelineManager, []},
       {Feather.ConfigLoader, []},
       {FeatherMailSupervisor, [],}
