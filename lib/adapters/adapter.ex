@@ -19,6 +19,9 @@ defmodule FeatherAdapters.Adapter do
 
   @callback init_session(opts :: keyword()) :: state
 
+  @callback ehlo(extensions :: list(), meta, state) ::
+              {:ok, meta, state} | {:halt, reason :: term(), state}
+
   @callback helo(helo :: String.t(), meta, state) ::
               {:ok, meta, state} | {:halt, reason :: term(), state}
 
@@ -39,5 +42,5 @@ defmodule FeatherAdapters.Adapter do
 
   @callback format_reason(reason :: term()) :: String.t()
 
-  @optional_callbacks helo: 3, auth: 3, mail: 3, rcpt: 3, data: 3, terminate: 3, format_reason: 1
+  @optional_callbacks ehlo: 3, helo: 3, auth: 3, mail: 3, rcpt: 3, data: 3, terminate: 3, format_reason: 1
 end

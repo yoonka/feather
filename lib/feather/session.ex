@@ -63,7 +63,18 @@ defmodule Feather.Session do
         smtp_extensions
       end
 
-    {:ok, smtp_extensions ++ extensions, state}
+    # Allow adapters to modify extensions via ehlo/3 callback
+    state_with_exts = %{state | meta: Map.put(state.meta, :extensions, smtp_extensions)}
+
+    case step(:ehlo, smtp_extensions, state_with_exts) do
+      {:ok, %{meta: meta} = updated_state} ->
+        final_extensions = Map.get(meta, :extensions, smtp_extensions)
+        clean_meta = Map.delete(meta, :extensions)
+        {:ok, final_extensions ++ extensions, %{updated_state | meta: clean_meta}}
+
+      {:error, reason, failed_state} ->
+        {:error, reason, failed_state}
+    end
   end
 
   def handle_HELO(domain, {:ok, state}) do
