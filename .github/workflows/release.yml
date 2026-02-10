@@ -101,3 +101,18 @@ jobs:
             feather_docs.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Update Global Environment Variable version
+        env:
+          TOKEN: ${{ secrets.ENVAAS_KEY }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          curl -X PUT \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"value\": \"$VERSION\", \"is_public\": true}" \
+            https://envaas.dev/oxsSIlbt/production/VERSION
+      
+  
+
+    
