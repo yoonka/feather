@@ -9,6 +9,8 @@ defmodule FeatherAdapters.Access.BackscatterGuard.Maildir do
   ## Options
 
     * `:path` — base path to Maildir storage (required)
+    * `:domains` — list of domains this guard is responsible for (optional).
+      When set, recipients for other domains are skipped (returns `:skip`).
     * `:mode` — `:flat` or `:domain_split` (default: `:flat`)
       - `:flat` — expects `{path}/{localpart}/`
       - `:domain_split` — expects `{path}/{domain}/{localpart}/`
@@ -33,17 +35,27 @@ defmodule FeatherAdapters.Access.BackscatterGuard.Maildir do
 
   def valid_recipient?(address, opts) do
     base_path = Keyword.fetch!(opts, :path)
+    domains = Keyword.get(opts, :domains)
     mode = Keyword.get(opts, :mode, :flat)
     check = Keyword.get(opts, :check, :exists)
 
     case parse_address(address) do
       {:ok, localpart, domain} ->
-        maildir_path = build_path(base_path, localpart, domain, mode)
-        validate_path(maildir_path, check)
+        if domains != nil and not domain_member?(domain, domains) do
+          :skip
+        else
+          maildir_path = build_path(base_path, localpart, domain, mode)
+          validate_path(maildir_path, check)
+        end
 
       :error ->
         false
     end
+  end
+
+  defp domain_member?(domain, domains) do
+    downcased = String.downcase(domain)
+    Enum.any?(domains, &(String.downcase(&1) == downcased))
   end
 
   defp parse_address(address) do

@@ -52,7 +52,11 @@ defmodule FeatherAdapters.Access.BackscatterGuard.AliasFile do
         Map.has_key?(aliases, localpart)
 
       {localpart, addr_domain} ->
-        Map.has_key?(aliases, localpart) and domain_match?(addr_domain, domain)
+        if domain_match?(addr_domain, domain) do
+          Map.has_key?(aliases, localpart)
+        else
+          :skip
+        end
     end
   end
 

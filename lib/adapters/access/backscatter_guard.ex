@@ -13,7 +13,10 @@ defmodule FeatherAdapters.Access.BackscatterGuard do
 
   Guards are modules implementing `valid_recipient?/2`:
 
-      @callback valid_recipient?(address :: String.t(), opts :: keyword()) :: boolean()
+      @callback valid_recipient?(address :: String.t(), opts :: keyword()) :: boolean() | :skip
+
+  Guards may return `:skip` to indicate they have no authority over the
+  recipient's domain. If all guards skip, the recipient is accepted.
 
   ## Options
 
@@ -54,10 +57,17 @@ defmodule FeatherAdapters.Access.BackscatterGuard do
   end
 
   defp valid?(recipient, guards) do
-    Enum.any?(guards, fn
-      {mod, opts} -> mod.valid_recipient?(recipient, opts)
-      mod when is_atom(mod) -> mod.valid_recipient?(recipient, [])
-    end)
+    results =
+      Enum.map(guards, fn
+        {mod, opts} -> mod.valid_recipient?(recipient, opts)
+        mod when is_atom(mod) -> mod.valid_recipient?(recipient, [])
+      end)
+
+    cond do
+      Enum.any?(results, &(&1 == true)) -> true
+      Enum.any?(results, &(&1 == false)) -> false
+      true -> true
+    end
   end
 
   @impl true

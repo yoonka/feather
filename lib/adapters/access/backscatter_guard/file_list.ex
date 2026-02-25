@@ -3,7 +3,7 @@ defmodule FeatherAdapters.Access.BackscatterGuard.FileList do
   A guard that validates recipients against a list of local usernames in a file.
 
   Only recipients whose domain matches one of the configured `:domains` are
-  checked. Recipients for other domains are ignored (returns `false`).
+  checked. Recipients for other domains are skipped (returns `:skip`).
 
   The file should contain one username (localpart) per line. Blank lines and
   lines starting with `#` are ignored. Matching is case-insensitive.
@@ -36,7 +36,7 @@ defmodule FeatherAdapters.Access.BackscatterGuard.FileList do
         if MapSet.member?(domains, String.downcase(addr_domain)) do
           match_localpart?(path, String.downcase(localpart))
         else
-          false
+          :skip
         end
 
       _ ->
