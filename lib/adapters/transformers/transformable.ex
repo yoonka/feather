@@ -76,6 +76,7 @@ end
       def transform_data(raw, meta, state) do
         Enum.reduce(state.transformers, {raw, meta}, fn
           {mod, opts}, {acc_raw, acc_meta} ->
+            Code.ensure_loaded(mod)
             case function_exported?(mod, :transform_data, 4) do
               true -> mod.transform_data(acc_raw, acc_meta, state, opts)
               false -> {acc_raw, acc_meta}

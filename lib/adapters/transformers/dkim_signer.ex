@@ -86,21 +86,13 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
   # ---------- Core signing ----------
 
   defp sign_message(raw, dkim_opts) do
-    case :mimemail.decode(raw) do
-      decoded ->
-
-
-        :mimemail.encode(decoded, [dkim: dkim_opts])
-
-      _ ->
-        Logger.warning("DKIM: Could not decode message for signing")
+    try do
+      decoded = :mimemail.decode(raw)
+      :mimemail.encode(decoded, [dkim: dkim_opts])
+    catch
+      kind, reason ->
+        Logger.error("DKIM: Signing failed (#{kind}): #{inspect(reason)}")
         raw
     end
-  rescue
-    e ->
-      Logger.error("DKIM: Signing failed: #{inspect(e)}")
-      raw
   end
-
-
 end

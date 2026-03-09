@@ -78,7 +78,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   @impl true
   def init_session(opts) do
     %{
-      domain: Keyword.get(opts, :domain, "localhost"),
+      hostname: Keyword.get(opts, :hostname, Keyword.get(opts, :domain, "localhost")),
       tls_options: Keyword.get(opts, :tls_options, [])
     }
   end
@@ -121,7 +121,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       tls: :always,
       ssl: false,
       auth: :never,
-      hostname: state.domain,
+      hostname: state.hostname,
       tls_options: state.tls_options
     ]
 
