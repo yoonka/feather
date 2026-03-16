@@ -74,8 +74,20 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
   @impl true
   def data(raw, %{from: from, to: rcpts} = meta, %{opts: opts} = state) do
     case deliver_smtp(from, rcpts, raw, opts) do
-      :ok -> {:ok, meta, state}
-      {:error, reason} -> {:halt, {:forwarding_failed, reason}, state}
+      :ok ->
+        {:ok, meta, state}
+
+      {:error, reason} ->
+        # Generate DSN for all recipients on forwarding failure (RFC 3461 §4)
+        hostname = Keyword.get(opts, :server, "localhost")
+
+        Feather.DSN.notify_failure(from, rcpts, reason,
+          hostname: hostname,
+          diagnostic_code: "smtp; 451 4.4.1 SMTP forward failed: #{inspect(reason)}",
+          status: "4.4.1"
+        )
+
+        {:halt, {:forwarding_failed, reason}, state}
     end
   end
 
@@ -90,12 +102,28 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
       tls_options: opts[:tls_options]
     ]
 
-    case :gen_smtp_client.send({from, rcpts, raw}, options) do
-      {:ok, _} -> :ok
-      other -> {:error, other}
+    case :gen_smtp_client.send_blocking({from, rcpts, raw}, options) do
+      :ok -> :ok
+      {:ok, _receipt} -> :ok
+
+      resp when is_binary(resp) or is_list(resp) ->
+        if smtp_success?(resp), do: :ok, else: {:error, {:unexpected_result, resp}}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, reason}
+
+      {:error, type, message} ->
+        {:error, {type, message}}
+
+      other ->
+        {:error, {:unexpected_result, other}}
     end
+  end
 
-
+  defp smtp_success?(resp) do
+    s = to_string(resp) |> String.trim()
+    String.match?(s, ~r/^\s*2\d\d(\s|-)/) or
+      String.starts_with?(s, ["2.0.0", "250", "251", "252"])
   end
 
   @impl true

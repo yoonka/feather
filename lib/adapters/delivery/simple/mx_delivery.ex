@@ -85,16 +85,30 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
 
   @impl true
   def data(raw, %{from: from, to: recipients} = meta, state) do
-    recipients
-    |> Enum.group_by(&domain_of/1)
-    |> Enum.map(&deliver_grouped(&1, from, raw, state))
-    |> Enum.find(fn
-      {:error, _} -> true
-      _ -> false
-    end)
-    |> case do
-      nil -> {:ok, meta, state}
-      {:error, reason} -> {:halt, {:remote_delivery_failed, reason}, state}
+    results =
+      recipients
+      |> Enum.group_by(&domain_of/1)
+      |> Enum.map(&deliver_grouped(&1, from, raw, state))
+
+    failed =
+      Enum.flat_map(results, fn
+        {:error, _reason, rcpts} -> rcpts
+        _ -> []
+      end)
+
+    case failed do
+      [] ->
+        {:ok, meta, state}
+
+      failed_rcpts ->
+        # Generate DSN for recipients whose delivery failed (RFC 3461 §4)
+        Feather.DSN.notify_failure(from, failed_rcpts, :remote_delivery_failed,
+          hostname: state.hostname,
+          diagnostic_code: "smtp; 451 4.4.1 Could not deliver to remote server",
+          status: "4.4.1"
+        )
+
+        {:halt, {:remote_delivery_failed, {:failed_recipients, failed_rcpts}}, state}
     end
   end
 
@@ -106,11 +120,11 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
     else
       {:error, reason} ->
         Logger.warning("[REMOTE] Failed delivery to #{domain}: #{inspect(reason)}")
-        {:error, reason}
+        {:error, reason, rcpts}
 
       nil ->
         Logger.warning("[REMOTE] No MX records for #{domain}")
-        {:error, :no_mx_records}
+        {:error, :no_mx_records, rcpts}
     end
   end
 
