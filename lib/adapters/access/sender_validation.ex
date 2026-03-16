@@ -1,7 +1,8 @@
 defmodule FeatherAdapters.Access.SenderValidation do
   @moduledoc """
-  An access-control adapter that validates the MAIL FROM address matches
-  the authenticated user's identity, preventing sender impersonation.
+  An access-control adapter that validates the MAIL FROM address and the
+  RFC 5322 `From:` header match the authenticated user's identity,
+  preventing sender impersonation.
 
   ## Why This Matters
 
@@ -14,12 +15,22 @@ defmodule FeatherAdapters.Access.SenderValidation do
 
   ## Behavior
 
+  ### Envelope (`MAIL FROM`)
+
   - During `MAIL FROM`, consults a list of provider modules to determine
     if the authenticated user is authorized to send as the given address.
   - If **any provider** approves → ACCEPT
   - If **any provider** explicitly rejects → REJECT with `553 5.7.1`
   - If **all providers** skip → REJECT (fail-closed, this is a security control)
   - Unauthenticated sessions are skipped (other adapters like RelayControl handle those)
+
+  ### Header (`From:`)
+
+  - During `DATA`, parses the RFC 5322 `From:` header from the message body
+    and validates the address against the same provider chain.
+  - Prevents display-name spoofing and header-level impersonation (CEO fraud).
+  - Can be disabled with `validate_header: false` if only envelope validation
+    is needed.
 
   ## Providers
 
@@ -47,6 +58,8 @@ defmodule FeatherAdapters.Access.SenderValidation do
 
   * `:providers` — list of `{ProviderModule, opts}` tuples (required)
   * `:exempt_users` — list of usernames that bypass validation (default: [])
+  * `:validate_header` — whether to validate the `From:` header during DATA
+    (default: `true`)
 
   ## Examples
 
@@ -118,10 +131,12 @@ defmodule FeatherAdapters.Access.SenderValidation do
   def init_session(opts) do
     providers = Keyword.get(opts, :providers, [])
     exempt_users = Keyword.get(opts, :exempt_users, [])
+    validate_header = Keyword.get(opts, :validate_header, true)
 
     %{
       providers: providers,
-      exempt_users: MapSet.new(exempt_users, &String.downcase/1)
+      exempt_users: MapSet.new(exempt_users, &String.downcase/1),
+      validate_header: validate_header
     }
   end
 
@@ -148,11 +163,100 @@ defmodule FeatherAdapters.Access.SenderValidation do
   end
 
   @impl true
+  def data(raw, meta, state) do
+    case {state.validate_header, Map.get(meta, :user)} do
+      {false, _} ->
+        {:ok, meta, state}
+
+      {_, nil} ->
+        # Unauthenticated session — skip
+        {:ok, meta, state}
+
+      {true, username} ->
+        if MapSet.member?(state.exempt_users, String.downcase(username)) do
+          {:ok, meta, state}
+        else
+          case extract_from_header(raw) do
+            nil ->
+              # No From: header — let it through (other systems may add it)
+              {:ok, meta, state}
+
+            from_address ->
+              case check_providers(from_address, username, state.providers) do
+                :authorized ->
+                  {:ok, meta, state}
+
+                :unauthorized ->
+                  {:halt, {:from_header_unauthorized, from_address, username}, state}
+              end
+          end
+        end
+    end
+  end
+
+  @impl true
   def format_reason({:sender_unauthorized, sender, _username}) do
     "553 5.7.1 Sender address rejected: you are not authorized to send as <#{sender}>"
   end
 
+  def format_reason({:from_header_unauthorized, from_address, _username}) do
+    "550 5.7.1 From header address rejected: you are not authorized to send as <#{from_address}>"
+  end
+
   # Private functions
+
+  # Extracts the email address from the RFC 5322 From: header.
+  # Handles formats like:
+  #   From: user@example.com
+  #   From: Display Name <user@example.com>
+  #   From: "Display Name" <user@example.com>
+  defp extract_from_header(raw) do
+    headers =
+      raw
+      |> String.split(~r/\r?\n\r?\n/, parts: 2)
+      |> List.first("")
+
+    # Unfold continuation lines (RFC 5322 §2.2.3)
+    unfolded = String.replace(headers, ~r/\r?\n[ \t]+/, " ")
+
+    from_line =
+      unfolded
+      |> String.split(~r/\r?\n/)
+      |> Enum.find(fn line ->
+        String.match?(line, ~r/^From:\s/i)
+      end)
+
+    case from_line do
+      nil ->
+        nil
+
+      line ->
+        value = String.replace(line, ~r/^From:\s*/i, "")
+        extract_address(value)
+    end
+  end
+
+  # Extract bare email address from a From: header value
+  defp extract_address(value) do
+    value = String.trim(value)
+
+    # Try angle-bracket format: "Display Name <addr>" or <addr>
+    case Regex.run(~r/<([^>]+)>/, value) do
+      [_, addr] -> addr
+      nil -> extract_bare_address(value)
+    end
+  end
+
+  # Bare address (no angle brackets): user@example.com
+  defp extract_bare_address(value) do
+    value = String.trim(value)
+
+    if String.contains?(value, "@") and not String.contains?(value, " ") do
+      value
+    else
+      nil
+    end
+  end
 
   defp check_providers(sender, username, providers) do
     results =

@@ -119,15 +119,21 @@ defmodule Feather.Session do
 
   @impl true
   def handle_DATA(from, to, data, %{meta: meta} = state) do
-    meta = Map.merge(meta, %{from: from, to: to})
+    case sanitize_headers(data) do
+      {:ok, sanitized} ->
+        meta = Map.merge(meta, %{from: from, to: to})
 
-    step(:data, data, %{state | meta: meta})
-    |> case do
-      {:ok, updated_state} ->
-        {:ok, "250 2.0.0 OK: message accepted", updated_state}
+        step(:data, sanitized, %{state | meta: meta})
+        |> case do
+          {:ok, updated_state} ->
+            {:ok, "250 2.0.0 OK: message accepted", updated_state}
 
-      {:error, reason, failed_state} ->
-        {:error, reason, failed_state}
+          {:error, reason, failed_state} ->
+            {:error, reason, failed_state}
+        end
+
+      {:error, reason} ->
+        {:error, reason, state}
     end
   end
 
@@ -195,6 +201,88 @@ defmodule Feather.Session do
     end
   end
 
+
+  # Validates the header section of an RFC 5322 message.
+  #
+  # Rejects messages with:
+  # 1. NUL bytes or bare CR in headers (RFC 5322 §2.2 violation)
+  # 2. Malformed header lines (invalid field name syntax)
+  # 3. Bcc headers present in submission (MUA must strip before sending)
+  defp sanitize_headers(data) do
+    {_separator, parts} = split_headers_body(data)
+
+    case parts do
+      {headers_raw, _body} ->
+        lines = String.split(headers_raw, ~r/\r?\n/)
+
+        case validate_header_lines(lines) do
+          :ok -> {:ok, data}
+          error -> error
+        end
+
+      :no_body ->
+        {:ok, data}
+    end
+  end
+
+  defp split_headers_body(data) do
+    cond do
+      String.contains?(data, "\r\n\r\n") ->
+        [h, b] = String.split(data, "\r\n\r\n", parts: 2)
+        {"\r\n", {h, b}}
+
+      String.contains?(data, "\n\n") ->
+        [h, b] = String.split(data, "\n\n", parts: 2)
+        {"\n", {h, b}}
+
+      true ->
+        {"\r\n", :no_body}
+    end
+  end
+
+  defp validate_header_lines(lines) do
+    result =
+      Enum.find_value(lines, fn line ->
+        cond do
+          String.contains?(line, "\0") ->
+            {:error, "550 5.6.0 Message rejected: NUL byte in header"}
+
+          String.contains?(line, "\r") ->
+            {:error, "550 5.6.0 Message rejected: bare CR in header"}
+
+          String.match?(line, ~r/^Bcc:/i) ->
+            {:error, "550 5.6.0 Message rejected: Bcc header must not be present in submission"}
+
+          not valid_header_line?(line) ->
+            {:error, "550 5.6.0 Message rejected: malformed header"}
+
+          true ->
+            nil
+        end
+      end)
+
+    result || :ok
+  end
+
+  defp valid_header_line?(""), do: true
+  defp valid_header_line?(<<c, _rest::binary>>) when c in [?\s, ?\t], do: true
+
+  defp valid_header_line?(line) do
+    case String.split(line, ":", parts: 2) do
+      [name, _value] ->
+        byte_size(name) > 0 and valid_field_name?(name)
+
+      _ ->
+        false
+    end
+  end
+
+  # RFC 5322 field names: printable US-ASCII except colon and space
+  defp valid_field_name?(name) do
+    name
+    |> :binary.bin_to_list()
+    |> Enum.all?(fn c -> c >= 33 and c <= 126 and c != ?:  end)
+  end
 
   defp format_reason({mod, reason}) do
     if function_exported?(mod, :format_reason, 1) do
