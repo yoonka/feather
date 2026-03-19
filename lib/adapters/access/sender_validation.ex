@@ -24,11 +24,12 @@ defmodule FeatherAdapters.Access.SenderValidation do
   - If **all providers** skip → REJECT (fail-closed, this is a security control)
   - Unauthenticated sessions are skipped (other adapters like RelayControl handle those)
 
-  ### Header (`From:`)
+  ### Header (`From:` and `Sender:`)
 
-  - During `DATA`, parses the RFC 5322 `From:` header from the message body
-    and validates the address against the same provider chain.
+  - During `DATA`, parses the RFC 5322 `From:` and `Sender:` headers from the
+    message body and validates both addresses against the same provider chain.
   - Prevents display-name spoofing and header-level impersonation (CEO fraud).
+  - Handles edge cases like missing whitespace after the colon (`From:addr`).
   - Can be disabled with `validate_header: false` if only envelope validation
     is needed.
 
@@ -176,19 +177,11 @@ defmodule FeatherAdapters.Access.SenderValidation do
         if MapSet.member?(state.exempt_users, String.downcase(username)) do
           {:ok, meta, state}
         else
-          case extract_from_header(raw) do
-            nil ->
-              # No From: header — let it through (other systems may add it)
-              {:ok, meta, state}
-
-            from_address ->
-              case check_providers(from_address, username, state.providers) do
-                :authorized ->
-                  {:ok, meta, state}
-
-                :unauthorized ->
-                  {:halt, {:from_header_unauthorized, from_address, username}, state}
-              end
+          with :ok <- validate_header_address(raw, :from, username, state.providers),
+               :ok <- validate_header_address(raw, :sender, username, state.providers) do
+            {:ok, meta, state}
+          else
+            {:halt, reason} -> {:halt, reason, state}
           end
         end
     end
@@ -203,14 +196,48 @@ defmodule FeatherAdapters.Access.SenderValidation do
     "550 5.7.1 From header address rejected: you are not authorized to send as <#{from_address}>"
   end
 
+  def format_reason({:sender_header_unauthorized, sender_address, _username}) do
+    "550 5.7.1 Sender header address rejected: you are not authorized to send as <#{sender_address}>"
+  end
+
   # Private functions
 
-  # Extracts the email address from the RFC 5322 From: header.
+  # Validates a specific header (From: or Sender:) against the provider chain.
+  # Returns :ok if valid or no header found, {:halt, reason} if unauthorized.
+  defp validate_header_address(raw, header_type, username, providers) do
+    case extract_header_address(raw, header_type) do
+      nil ->
+        :ok
+
+      address ->
+        case check_providers(address, username, providers) do
+          :authorized ->
+            :ok
+
+          :unauthorized ->
+            reason_tag =
+              case header_type do
+                :from -> :from_header_unauthorized
+                :sender -> :sender_header_unauthorized
+              end
+
+            {:halt, {reason_tag, address, username}}
+        end
+    end
+  end
+
+  # Extracts the email address from a named header (From: or Sender:).
   # Handles formats like:
   #   From: user@example.com
   #   From: Display Name <user@example.com>
   #   From: "Display Name" <user@example.com>
-  defp extract_from_header(raw) do
+  #   From:user@example.com  (no space after colon)
+  defp extract_header_address(raw, header_type) do
+    header_name = case header_type do
+      :from -> "From"
+      :sender -> "Sender"
+    end
+
     headers =
       raw
       |> String.split(~r/\r?\n\r?\n/, parts: 2)
@@ -219,19 +246,22 @@ defmodule FeatherAdapters.Access.SenderValidation do
     # Unfold continuation lines (RFC 5322 §2.2.3)
     unfolded = String.replace(headers, ~r/\r?\n[ \t]+/, " ")
 
-    from_line =
+    # Match header with optional whitespace after colon (From:addr and From: addr)
+    header_regex = ~r/^#{header_name}:\s*/i
+
+    header_line =
       unfolded
       |> String.split(~r/\r?\n/)
       |> Enum.find(fn line ->
-        String.match?(line, ~r/^From:\s/i)
+        String.match?(line, header_regex)
       end)
 
-    case from_line do
+    case header_line do
       nil ->
         nil
 
       line ->
-        value = String.replace(line, ~r/^From:\s*/i, "")
+        value = String.replace(line, header_regex, "")
         extract_address(value)
     end
   end

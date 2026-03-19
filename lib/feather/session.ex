@@ -202,22 +202,27 @@ defmodule Feather.Session do
   end
 
 
-  # Validates the header section of an RFC 5322 message.
+  # Validates and sanitizes the header section of an RFC 5322 message.
   #
   # Rejects messages with:
   # 1. NUL bytes or bare CR in headers (RFC 5322 §2.2 violation)
   # 2. Malformed header lines (invalid field name syntax)
   # 3. Bcc headers present in submission (MUA must strip before sending)
+  # 4. MTA-only headers that clients must not set (Return-Path, Received, etc.)
   defp sanitize_headers(data) do
-    {_separator, parts} = split_headers_body(data)
+    {separator, parts} = split_headers_body(data)
 
     case parts do
-      {headers_raw, _body} ->
+      {headers_raw, body} ->
         lines = String.split(headers_raw, ~r/\r?\n/)
 
         case validate_header_lines(lines) do
-          :ok -> {:ok, data}
-          error -> error
+          :ok ->
+            cleaned = strip_forbidden_headers(lines)
+            {:ok, Enum.join(cleaned, separator) <> separator <> separator <> body}
+
+          error ->
+            error
         end
 
       :no_body ->
@@ -239,6 +244,22 @@ defmodule Feather.Session do
         {"\r\n", :no_body}
     end
   end
+
+  # Headers that submission clients must not set — these are added by MTAs,
+  # MDAs, or security infrastructure. Allowing them enables header injection
+  # attacks (bounce hijacking, auth bypass, spam filter evasion).
+  @forbidden_headers MapSet.new([
+    "return-path",          # RFC 5321 §4.4 — set by MTA from envelope
+    "received",             # RFC 5321 — set by each relay
+    "authentication-results", # RFC 8601 — set by receiving MTA
+    "dkim-signature",       # RFC 6376 — set by signing MTA
+    "arc-seal",             # RFC 8617 — ARC protocol
+    "arc-message-signature", # RFC 8617
+    "arc-authentication-results", # RFC 8617
+    "x-spam-status",        # SpamAssassin — set by spam filter
+    "x-spam-flag",          # SpamAssassin
+    "x-spam-score"          # SpamAssassin
+  ])
 
   defp validate_header_lines(lines) do
     result =
@@ -262,6 +283,39 @@ defmodule Feather.Session do
       end)
 
     result || :ok
+  end
+
+  # Silently strips headers that authenticated clients must not set.
+  # These are MTA/MDA-only headers; their presence in submission is
+  # either a misconfigured client or an injection attempt.
+  defp strip_forbidden_headers(lines) do
+    {kept, _skipping} =
+      Enum.reduce(lines, {[], false}, fn line, {acc, skipping_folded} ->
+        cond do
+          # Continuation line (starts with whitespace) — belongs to previous header
+          String.match?(line, ~r/^[ \t]/) ->
+            if skipping_folded, do: {acc, true}, else: {[line | acc], false}
+
+          forbidden_header?(line) ->
+            # Drop this header and any following continuation lines
+            {acc, true}
+
+          true ->
+            {[line | acc], false}
+        end
+      end)
+
+    Enum.reverse(kept)
+  end
+
+  defp forbidden_header?(line) do
+    case String.split(line, ":", parts: 2) do
+      [name, _value] ->
+        MapSet.member?(@forbidden_headers, String.downcase(name))
+
+      _ ->
+        false
+    end
   end
 
   defp valid_header_line?(""), do: true
