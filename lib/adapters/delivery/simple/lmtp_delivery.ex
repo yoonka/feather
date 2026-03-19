@@ -130,7 +130,9 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
             _ -> "localhost"
           end
 
-        Feather.DSN.notify_failure(from, recipients, reason,
+        dsn_sender = Map.get(meta, :original_from, from)
+
+        Feather.DSN.notify_failure(dsn_sender, recipients, reason,
           hostname: hostname,
           diagnostic_code: "lmtp; 451 4.3.0 Local delivery failed: #{inspect(reason)}",
           status: "4.3.0"

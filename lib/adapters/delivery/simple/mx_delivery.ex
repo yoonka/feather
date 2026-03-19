@@ -79,7 +79,8 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   def init_session(opts) do
     %{
       hostname: Keyword.get(opts, :hostname, Keyword.get(opts, :domain, "localhost")),
-      tls_options: Keyword.get(opts, :tls_options, [])
+      tls_options: Keyword.get(opts, :tls_options, []),
+      local_domains: Keyword.get(opts, :local_domains, [])
     }
   end
 
@@ -101,11 +102,15 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
         {:ok, meta, state}
 
       failed_rcpts ->
+        # Use original sender for DSN, not the SRS-rewritten address
+        dsn_sender = Map.get(meta, :original_from, from)
+
         # Generate DSN for recipients whose delivery failed (RFC 3461 §4)
-        Feather.DSN.notify_failure(from, failed_rcpts, :remote_delivery_failed,
+        Feather.DSN.notify_failure(dsn_sender, failed_rcpts, :remote_delivery_failed,
           hostname: state.hostname,
           diagnostic_code: "smtp; 451 4.4.1 Could not deliver to remote server",
-          status: "4.4.1"
+          status: "4.4.1",
+          local_domains: state.local_domains
         )
 
         {:halt, {:remote_delivery_failed, {:failed_recipients, failed_rcpts}}, state}
@@ -171,14 +176,22 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   end
 
   defp lookup_mx(domain) when is_binary(domain) do
+    charlist_domain = String.to_charlist(domain)
+
     try do
-      case :inet_res.lookup(String.to_charlist(domain), :in, :mx) do
-        [] -> {:error, :no_mx_records}
-        records when is_list(records) ->
+      case :inet_res.lookup(charlist_domain, :in, :mx) do
+        records when is_list(records) and records != [] ->
           records
           |> Enum.map(fn {priority, host} -> {priority, to_string(host)} end)
           |> Enum.sort_by(fn {priority, _} -> priority end)
           |> then(&{:ok, &1})
+
+        [] ->
+          # RFC 5321 §5.1: fall back to A/AAAA record as implicit MX
+          case :inet.getaddr(charlist_domain, :inet) do
+            {:ok, _ip} -> {:ok, [{0, domain}]}
+            {:error, _} -> {:error, :no_mx_records}
+          end
       end
     rescue
       e ->

@@ -57,7 +57,9 @@ defmodule FeatherAdapters.Transformers.SRSRewriter do
         original_from
       end
 
-    Map.put(meta, :from, new_from)
+    meta
+    |> Map.put_new(:original_from, original_from)
+    |> Map.put(:from, new_from)
   end
 
   # --- SRS Implementation ---

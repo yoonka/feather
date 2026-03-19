@@ -19,6 +19,9 @@ defmodule Feather.DSN do
 
     - `:hostname` — the reporting MTA hostname used in the DSN envelope
       and `Reporting-MTA` field. Defaults to the system hostname.
+    - `:local_domains` — list of domains hosted locally. DSNs for senders
+      on these domains are delivered to `127.0.0.1` instead of doing MX lookup.
+      This prevents the MTA from trying to connect to itself externally.
   """
 
   alias Feather.Logger
@@ -141,30 +144,46 @@ defmodule Feather.DSN do
         "for #{inspect(failed_recipients)}"
     )
 
-    # Look up MX for the sender's domain and deliver the DSN
     sender_domain = domain_of(original_sender)
+    local_domains = Keyword.get(opts, :local_domains, [])
 
-    case lookup_mx(sender_domain) do
-      {:ok, mx_records} ->
-        {_, mx_host} = List.first(mx_records)
-        do_send_dsn(mx_host, original_sender, dsn_body, hostname)
+    # For local domains, deliver to loopback instead of MX lookup
+    # (prevents MTA from trying to connect to itself externally)
+    if local_domain?(sender_domain, local_domains) do
+      Logger.info("[DSN] Sender #{sender_domain} is local, delivering to 127.0.0.1")
+      do_send_dsn("127.0.0.1", original_sender, dsn_body, hostname)
+    else
+      case lookup_mx(sender_domain) do
+        {:ok, mx_records} ->
+          {_, mx_host} = List.first(mx_records)
+          do_send_dsn(mx_host, original_sender, dsn_body, hostname)
 
-      {:error, mx_reason} ->
-        Logger.error(
-          "[DSN] Cannot send DSN to #{original_sender}: " <>
-            "MX lookup failed for #{sender_domain}: #{inspect(mx_reason)}"
-        )
+        {:error, mx_reason} ->
+          Logger.error(
+            "[DSN] Cannot send DSN to #{original_sender}: " <>
+              "MX lookup failed for #{sender_domain}: #{inspect(mx_reason)}"
+          )
+      end
     end
+  end
+
+  defp local_domain?(domain, local_domains) do
+    Enum.any?(local_domains, fn local ->
+      String.downcase(domain) == String.downcase(local)
+    end)
   end
 
   defp do_send_dsn(mx_host, original_sender, dsn_body, hostname) do
     options = [
       relay: String.to_charlist(mx_host),
       port: 25,
-      tls: :always,
+      tls: :if_available,
       ssl: false,
       auth: :never,
-      hostname: hostname
+      hostname: hostname,
+      tls_options: [
+        verify: :verify_none
+      ]
     ]
 
     # MAIL FROM:<> — null reverse-path per RFC 5321 §4.5.5
@@ -198,15 +217,22 @@ defmodule Feather.DSN do
   end
 
   defp lookup_mx(domain) do
-    try do
-      case :inet_res.lookup(String.to_charlist(domain), :in, :mx) do
-        [] -> {:error, :no_mx_records}
+    charlist_domain = String.to_charlist(domain)
 
-        records when is_list(records) ->
+    try do
+      case :inet_res.lookup(charlist_domain, :in, :mx) do
+        records when is_list(records) and records != [] ->
           records
           |> Enum.map(fn {priority, host} -> {priority, to_string(host)} end)
           |> Enum.sort_by(fn {priority, _} -> priority end)
           |> then(&{:ok, &1})
+
+        [] ->
+          # RFC 5321 §5.1: fall back to A/AAAA record as implicit MX
+          case :inet.getaddr(charlist_domain, :inet) do
+            {:ok, _ip} -> {:ok, [{0, domain}]}
+            {:error, _} -> {:error, :no_mx_records}
+          end
       end
     rescue
       e -> {:error, {:dns_lookup_failed, e}}

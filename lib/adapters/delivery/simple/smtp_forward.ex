@@ -78,10 +78,11 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
         {:ok, meta, state}
 
       {:error, reason} ->
-        # Generate DSN for all recipients on forwarding failure (RFC 3461 §4)
+        # Use original sender for DSN, not the SRS-rewritten address
+        dsn_sender = Map.get(meta, :original_from, from)
         hostname = Keyword.get(opts, :server, "localhost")
 
-        Feather.DSN.notify_failure(from, rcpts, reason,
+        Feather.DSN.notify_failure(dsn_sender, rcpts, reason,
           hostname: hostname,
           diagnostic_code: "smtp; 451 4.4.1 SMTP forward failed: #{inspect(reason)}",
           status: "4.4.1"
