@@ -209,20 +209,23 @@ defmodule Feather.Session do
   # 2. Malformed header lines (invalid field name syntax)
   # 3. Bcc headers present in submission (MUA must strip before sending)
   # 4. MTA-only headers that clients must not set (Return-Path, Received, etc.)
+  # 5. Duplicate singleton headers (RFC 5322 §3.6)
+  # 6. Continuation lines that look like injected headers
   defp sanitize_headers(data) do
     {separator, parts} = split_headers_body(data)
 
     case parts do
       {headers_raw, body} ->
-        lines = String.split(headers_raw, ~r/\r?\n/)
+        if String.contains?(headers_raw, "\0") do
+          {:error, "550 5.6.0 Message rejected: NUL byte in header"}
+        else
+          lines = String.split(headers_raw, ~r/\r?\n/)
 
-        case validate_header_lines(lines) do
-          :ok ->
+          with :ok <- validate_header_lines(lines),
+               :ok <- validate_no_duplicate_singletons(lines) do
             cleaned = strip_forbidden_headers(lines)
             {:ok, Enum.join(cleaned, separator) <> separator <> separator <> body}
-
-          error ->
-            error
+          end
         end
 
       :no_body ->
@@ -274,6 +277,9 @@ defmodule Feather.Session do
           String.match?(line, ~r/^Bcc:/i) ->
             {:error, "550 5.6.0 Message rejected: Bcc header must not be present in submission"}
 
+          continuation_line_injection?(line) ->
+            {:error, "550 5.6.0 Message rejected: header injection via continuation line"}
+
           not valid_header_line?(line) ->
             {:error, "550 5.6.0 Message rejected: malformed header"}
 
@@ -283,6 +289,50 @@ defmodule Feather.Session do
       end)
 
     result || :ok
+  end
+
+  # RFC 5322 §3.6: these headers MUST NOT appear more than once.
+  @singleton_headers MapSet.new([
+    "from", "sender", "reply-to", "to", "cc", "subject",
+    "date", "message-id", "in-reply-to", "references",
+    "mime-version", "content-type", "content-transfer-encoding"
+  ])
+
+  defp validate_no_duplicate_singletons(lines) do
+    lines
+    |> Enum.reject(fn line -> line == "" or String.match?(line, ~r/^[ \t]/) end)
+    |> Enum.reduce_while(%{}, fn line, seen ->
+      case String.split(line, ":", parts: 2) do
+        [name, _value] ->
+          key = String.downcase(name)
+
+          if MapSet.member?(@singleton_headers, key) and Map.has_key?(seen, key) do
+            {:halt, {:error, "550 5.6.0 Message rejected: duplicate #{name} header"}}
+          else
+            {:cont, Map.put(seen, key, true)}
+          end
+
+        _ ->
+          {:cont, seen}
+      end
+    end)
+    |> case do
+      {:error, _} = err -> err
+      %{} -> :ok
+    end
+  end
+
+  # Detects continuation lines (starting with whitespace) that contain
+  # what looks like an injected header field (e.g. "\tReply-To: attacker@evil.com").
+  defp continuation_line_injection?(line) do
+    case line do
+      <<c, rest::binary>> when c in [?\s, ?\t] ->
+        trimmed = String.trim_leading(rest)
+        Regex.match?(~r/^[A-Za-z][A-Za-z0-9\-]*:\s/, trimmed)
+
+      _ ->
+        false
+    end
   end
 
   # Silently strips headers that authenticated clients must not set.
