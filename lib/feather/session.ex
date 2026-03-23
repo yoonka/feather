@@ -1,5 +1,6 @@
 defmodule Feather.Session do
   @behaviour :gen_smtp_server_session
+  require Logger
 
   @impl true
   def init(hostname, session_count, ip, opts) do
@@ -122,15 +123,32 @@ defmodule Feather.Session do
     case sanitize_headers(data) do
       {:ok, sanitized} ->
         meta = Map.merge(meta, %{from: from, to: to})
+        delivery_state = %{state | meta: meta}
+        hostname = state.hostname
 
-        step(:data, sanitized, %{state | meta: meta})
-        |> case do
-          {:ok, updated_state} ->
-            {:ok, "250 2.0.0 OK: message accepted", updated_state}
+        # Accept message immediately, deliver asynchronously.
+        # RFC 5321 §4.5.5 / RFC 3461 §4: once we return 250, we take
+        # responsibility for the message. If delivery fails, we MUST
+        # notify the sender via DSN.
+        Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
+          case step(:data, sanitized, delivery_state) do
+            {:ok, _} ->
+              Logger.info("[SESSION] Message delivered successfully from #{from}")
 
-          {:error, reason, failed_state} ->
-            {:error, reason, failed_state}
-        end
+            {:error, reason, _} ->
+              Logger.warning(
+                "[SESSION] Delivery failed from #{from}: #{inspect(reason)}"
+              )
+
+              Feather.DSN.notify_failure(from, to, reason,
+                hostname: hostname,
+                diagnostic_code: "smtp; 550 5.0.0 Delivery failed: #{inspect(reason)}",
+                status: "5.0.0"
+              )
+          end
+        end)
+
+        {:ok, "250 2.0.0 OK: message queued for delivery", delivery_state}
 
       {:error, reason} ->
         {:error, reason, state}

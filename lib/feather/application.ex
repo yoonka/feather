@@ -15,6 +15,7 @@ alias Feather.PipelineManager
       {Feather.Storage, []},
       {PipelineManager, []},
       {Feather.ConfigLoader, []},
+      {Task.Supervisor, name: Feather.DeliverySupervisor},
       {FeatherMailSupervisor, [],}
     ]
     opts = [strategy: :one_for_one, name: Feather.Supervisor]

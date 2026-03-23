@@ -57,18 +57,24 @@ defmodule FeatherAdapters.Access.SenderDomainValidator do
 
   @impl true
   def mail(from, meta, %{allowed_domains: allowed, require_auth_for_relay: require_auth} = state) do
-    # Allow authenticated users to relay if configured
-    if require_auth && Map.has_key?(meta, :user) do
-      {:ok, meta, state}
-    else
-      # Extract domain from email address
-      domain = extract_domain(from)
-
-      if MapSet.member?(allowed, domain) do
+    cond do
+      # RFC 5321 §4.5.5: Accept null sender (DSN bounces) without validation
+      from in ["", "<>", nil] ->
         {:ok, meta, state}
-      else
-        {:halt, {:sender_not_authorized, from}, state}
-      end
+
+      # Allow authenticated users to relay if configured
+      require_auth && Map.has_key?(meta, :user) ->
+        {:ok, meta, state}
+
+      true ->
+        # Extract domain from email address
+        domain = extract_domain(from)
+
+        if MapSet.member?(allowed, domain) do
+          {:ok, meta, state}
+        else
+          {:halt, {:sender_not_authorized, from}, state}
+        end
     end
   end
 

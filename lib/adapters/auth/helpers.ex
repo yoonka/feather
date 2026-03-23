@@ -39,8 +39,13 @@ defmodule FeatherAdapters.Auth.Helpers do
   defmacro __using__(_opts) do
     quote do
       @impl true
-      def mail(_from, meta, state) do
+      def mail(from, meta, state) do
         cond do
+          # RFC 5321 §4.5.5: Accept null sender (DSN bounces) without auth.
+          # Bounces use MAIL FROM:<> and must not be rejected for lack of auth.
+          from in ["", "<>", nil] ->
+            {:ok, meta, state}
+
           # Check if authenticated via meta.authenticated flag
           Map.get(meta, :authenticated, false) ->
             {:ok, meta, state}
