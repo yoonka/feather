@@ -122,22 +122,6 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
 
       {:error, reason} ->
         Logger.error("LMTP delivery failed: #{inspect(reason)}")
-
-        # Generate DSN for all recipients on LMTP delivery failure (RFC 3461 §4)
-        hostname =
-          case state do
-            %{mode: :tcp, host: host} -> host
-            _ -> "localhost"
-          end
-
-        dsn_sender = Map.get(meta, :original_from, from)
-
-        Feather.DSN.notify_failure(dsn_sender, recipients, reason,
-          hostname: hostname,
-          diagnostic_code: "lmtp; 451 4.3.0 Local delivery failed: #{inspect(reason)}",
-          status: "4.3.0"
-        )
-
         {:halt, :delivery_failed, state}
     end
   end

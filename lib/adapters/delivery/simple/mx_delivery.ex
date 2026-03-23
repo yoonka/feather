@@ -102,34 +102,55 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
         {:ok, meta, state}
 
       failed_rcpts ->
-        # Use original sender for DSN, not the SRS-rewritten address
-        dsn_sender = Map.get(meta, :original_from, from)
-
-        # Generate DSN for recipients whose delivery failed (RFC 3461 §4)
-        Feather.DSN.notify_failure(dsn_sender, failed_rcpts, :remote_delivery_failed,
-          hostname: state.hostname,
-          diagnostic_code: "smtp; 451 4.4.1 Could not deliver to remote server",
-          status: "4.4.1",
-          local_domains: state.local_domains
-        )
-
         {:halt, {:remote_delivery_failed, {:failed_recipients, failed_rcpts}}, state}
     end
   end
 
   defp deliver_grouped({domain, rcpts}, from, raw, state) do
-    with {:ok, mx_records} <- lookup_mx(domain),
-         {_, mx_host} <- List.first(mx_records),
-         result when result in [:ok] <- send_smtp(mx_host, from, rcpts, raw, state) do
-      :ok
-    else
-      {:error, reason} ->
-        Logger.warning("[REMOTE] Failed delivery to #{domain}: #{inspect(reason)}")
-        {:error, reason, rcpts}
+    case lookup_mx(domain) do
+      {:ok, mx_records} ->
+        try_mx_hosts(mx_records, domain, rcpts, from, raw, state)
 
-      nil ->
-        Logger.warning("[REMOTE] No MX records for #{domain}")
-        {:error, :no_mx_records, rcpts}
+      {:error, reason} ->
+        Logger.warning("[REMOTE] MX lookup failed for #{domain}: #{inspect(reason)}")
+        {:error, reason, rcpts}
+    end
+  end
+
+  # Try each MX host in priority order; if all fail, fall back to A/AAAA
+  # per RFC 5321 §5.1
+  defp try_mx_hosts(mx_records, domain, rcpts, from, raw, state) do
+    result =
+      Enum.reduce_while(mx_records, {:error, :all_mx_failed}, fn {_priority, mx_host}, _acc ->
+        case send_smtp(mx_host, from, rcpts, raw, state) do
+          :ok -> {:halt, :ok}
+          {:error, reason} ->
+            Logger.warning("[REMOTE] MX host #{mx_host} failed for #{domain}: #{inspect(reason)}")
+            {:cont, {:error, reason}}
+        end
+      end)
+
+    case result do
+      :ok ->
+        :ok
+
+      {:error, last_reason} ->
+        # Fall back to A/AAAA record as implicit MX
+        Logger.info("[REMOTE] All MX hosts failed for #{domain}, trying A record fallback")
+
+        case :inet.getaddr(String.to_charlist(domain), :inet) do
+          {:ok, _ip} ->
+            case send_smtp(domain, from, rcpts, raw, state) do
+              :ok -> :ok
+              {:error, reason} ->
+                Logger.warning("[REMOTE] A record fallback failed for #{domain}: #{inspect(reason)}")
+                {:error, reason, rcpts}
+            end
+
+          {:error, _} ->
+            Logger.warning("[REMOTE] No A record fallback for #{domain}")
+            {:error, last_reason, rcpts}
+        end
     end
   end
 

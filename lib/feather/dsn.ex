@@ -55,7 +55,7 @@ defmodule Feather.DSN do
     else
       hostname = Keyword.fetch!(opts, :hostname)
 
-      Task.start(fn ->
+      Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
         send_dsn(original_sender, failed_recipients, reason, hostname, opts)
       end)
 
@@ -79,13 +79,14 @@ defmodule Feather.DSN do
     per_recipient =
       failed_recipients
       |> Enum.map(fn rcpt ->
-        """
-        Original-Recipient: rfc822;#{rcpt}
-        Final-Recipient: rfc822;#{rcpt}
-        Action: failed
-        Status: #{status}
-        Diagnostic-Code: #{diagnostic}\
-        """
+        [
+          "Original-Recipient: rfc822;#{rcpt}",
+          "Final-Recipient: rfc822;#{rcpt}",
+          "Action: failed",
+          "Status: #{status}",
+          "Diagnostic-Code: #{diagnostic}"
+        ]
+        |> Enum.join("\r\n")
       end)
       |> Enum.join("\r\n\r\n")
 
@@ -93,45 +94,67 @@ defmodule Feather.DSN do
 
     original_ref =
       if original_msg_id do
-        "\r\nIn-Reply-To: #{original_msg_id}\r\nReferences: #{original_msg_id}"
+        "In-Reply-To: #{original_msg_id}\r\nReferences: #{original_msg_id}\r\n"
       else
         ""
       end
 
-    """
-    From: Mail Delivery System <MAILER-DAEMON@#{hostname}>\r
-    To: #{original_sender}\r
-    Subject: Delivery Status Notification (Failure)\r
-    Date: #{timestamp}\r
-    Message-ID: #{message_id}\r#{original_ref}
-    MIME-Version: 1.0\r
-    Content-Type: multipart/report; report-type=delivery-status; boundary="#{boundary}"\r
-    Auto-Submitted: auto-replied\r
-    \r
-    --#{boundary}\r
-    Content-Type: text/plain; charset=utf-8\r
-    \r
-    This is the mail delivery system at #{hostname}.\r
-    \r
-    Your message could not be delivered to the following recipients:\r
-    \r
-    #{recipient_list}\r
-    \r
-    Reason: #{reason_text}\r
-    \r
-    No further action is required on your part. If you believe this is\r
-    an error, please contact the postmaster at #{hostname}.\r
-    \r
-    --#{boundary}\r
-    Content-Type: message/delivery-status\r
-    \r
-    Reporting-MTA: dns;#{hostname}\r
-    Arrival-Date: #{timestamp}\r
-    \r
-    #{per_recipient}\r
-    \r
-    --#{boundary}--\r
-    """
+    headers =
+      [
+        "From: Mail Delivery System <MAILER-DAEMON@#{hostname}>",
+        "To: #{original_sender}",
+        "Subject: Delivery Status Notification (Failure)",
+        "Date: #{timestamp}",
+        "Message-ID: #{message_id}",
+        original_ref,
+        "MIME-Version: 1.0",
+        "Content-Type: multipart/report; report-type=delivery-status; boundary=\"#{boundary}\"",
+        "Auto-Submitted: auto-replied"
+      ]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\r\n")
+
+    text_part =
+      [
+        "This is the mail delivery system at #{hostname}.",
+        "",
+        "Your message could not be delivered to the following recipients:",
+        "",
+        recipient_list,
+        "",
+        "Reason: #{reason_text}",
+        "",
+        "No further action is required on your part. If you believe this is",
+        "an error, please contact the postmaster at #{hostname}."
+      ]
+      |> Enum.join("\r\n")
+
+    dsn_part =
+      [
+        "Reporting-MTA: dns;#{hostname}",
+        "Arrival-Date: #{timestamp}",
+        "",
+        per_recipient
+      ]
+      |> Enum.join("\r\n")
+
+    [
+      headers,
+      "",
+      "--#{boundary}",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      text_part,
+      "",
+      "--#{boundary}",
+      "Content-Type: message/delivery-status",
+      "",
+      dsn_part,
+      "",
+      "--#{boundary}--",
+      ""
+    ]
+    |> Enum.join("\r\n")
   end
 
   # -- Private --
@@ -155,8 +178,7 @@ defmodule Feather.DSN do
     else
       case lookup_mx(sender_domain) do
         {:ok, mx_records} ->
-          {_, mx_host} = List.first(mx_records)
-          do_send_dsn(mx_host, original_sender, dsn_body, hostname)
+          deliver_dsn_with_fallback(mx_records, sender_domain, original_sender, dsn_body, hostname)
 
         {:error, mx_reason} ->
           Logger.error(
@@ -173,6 +195,31 @@ defmodule Feather.DSN do
     end)
   end
 
+  # Try each MX host in priority order; if all fail, fall back to A/AAAA record
+  # per RFC 5321 §5.1
+  defp deliver_dsn_with_fallback(mx_records, domain, original_sender, dsn_body, hostname) do
+    result =
+      Enum.reduce_while(mx_records, :failed, fn {_priority, mx_host}, _acc ->
+        case do_send_dsn(mx_host, original_sender, dsn_body, hostname) do
+          :ok -> {:halt, :ok}
+          {:error, _} -> {:cont, :failed}
+        end
+      end)
+
+    if result == :failed do
+      # Fall back to A/AAAA record as implicit MX
+      Logger.info("[DSN] All MX hosts failed for #{domain}, trying A record fallback")
+
+      case :inet.getaddr(String.to_charlist(domain), :inet) do
+        {:ok, _ip} ->
+          do_send_dsn(domain, original_sender, dsn_body, hostname)
+
+        {:error, _} ->
+          Logger.error("[DSN] A record fallback also failed for #{domain}")
+      end
+    end
+  end
+
   defp do_send_dsn(mx_host, original_sender, dsn_body, hostname) do
     options = [
       relay: String.to_charlist(mx_host),
@@ -180,25 +227,35 @@ defmodule Feather.DSN do
       tls: :if_available,
       ssl: false,
       auth: :never,
-      hostname: hostname,
+      hostname: String.to_charlist(hostname),
       tls_options: [
         verify: :verify_none
       ]
     ]
 
     # MAIL FROM:<> — null reverse-path per RFC 5321 §4.5.5
-    case :gen_smtp_client.send_blocking({"", [original_sender], dsn_body}, options) do
-      resp when is_binary(resp) ->
-        Logger.info("[DSN] DSN sent to #{original_sender}: #{resp}")
+    try do
+      case :gen_smtp_client.send_blocking({"<>", [original_sender], dsn_body}, options) do
+        resp when is_binary(resp) ->
+          Logger.info("[DSN] DSN sent to #{original_sender} via #{mx_host}: #{resp}")
+          :ok
 
-      {:error, reason} when is_atom(reason) ->
-        Logger.error("[DSN] Failed to send DSN to #{original_sender}: #{inspect(reason)}")
+        {:error, reason} when is_atom(reason) ->
+          Logger.error("[DSN] Failed to send DSN via #{mx_host}: #{inspect(reason)}")
+          {:error, reason}
 
-      {:error, type, message} ->
-        Logger.error("[DSN] Failed to send DSN to #{original_sender}: #{inspect({type, message})}")
+        {:error, type, message} ->
+          Logger.error("[DSN] Failed to send DSN via #{mx_host}: #{inspect({type, message})}")
+          {:error, {type, message}}
 
-      other ->
-        Logger.error("[DSN] Unexpected result sending DSN to #{original_sender}: #{inspect(other)}")
+        other ->
+          Logger.error("[DSN] Unexpected result sending DSN via #{mx_host}: #{inspect(other)}")
+          {:error, other}
+      end
+    rescue
+      e ->
+        Logger.error("[DSN] Exception sending DSN via #{mx_host}: #{Exception.message(e)}")
+        {:error, e}
     end
   end
 
