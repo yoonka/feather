@@ -165,9 +165,13 @@ defmodule Feather.Session do
   end
 
   @impl true
-  def handle_VRFY(_address, state), do: {:ok, ~c"252 Not supported", state}
+  def handle_VRFY(_address, state), do: {:error, ~c"502 5.5.1 VRFY command disabled", state}
 
   @impl true
+  def handle_other("EXPN", _args, state) do
+    {~c"502 5.5.1 EXPN command disabled", state}
+  end
+
   def handle_other(_cmd, _args, state) do
     {:noreply, state}
   end
