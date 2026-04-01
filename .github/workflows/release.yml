@@ -21,6 +21,12 @@ jobs:
       - run: mix compile
       - run: MIX_ENV=prod mix release
 
+      - name: Bundle install files into release
+        run: |
+          cp dev/install.sh dev/feather.service dev/feather.rc _build/prod/rel/feather/
+          cp -r config/examples _build/prod/rel/feather/examples
+          chmod +x _build/prod/rel/feather/install.sh
+
       - name: Create release tarball
         run: |
           cd _build/prod/rel/feather
@@ -50,6 +56,9 @@ jobs:
             mix deps.get
             mix compile
             MIX_ENV=prod mix release
+            cp dev/install.sh dev/feather.service dev/feather.rc _build/prod/rel/feather/
+            cp -r config/examples _build/prod/rel/feather/examples
+            chmod +x _build/prod/rel/feather/install.sh
             cd _build/prod/rel/feather
             tar -czf $GITHUB_WORKSPACE/feather-freebsd-amd64.tar.gz .
 

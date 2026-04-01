@@ -8,16 +8,65 @@ Built on top of Elixir and the rock-solid BEAM runtime, Feather Mail combines fa
 
 ---
 
-## 📚 Documentation
+## Installation
 
-Full documentation is available at:  
-👉 [https://keikan.yoonka.com/feather](https://keikan.yoonka.com/feather)
+### From a release tarball
 
-Explore:
-- Configuration examples
-- Adapter reference
-- Pipeline and transformer guides
-- Deployment instructions
+Download the latest release for your platform from [Releases](../../releases), then:
+
+```bash
+tar -xzf feather-linux-amd64.tar.gz
+cd feather
+sudo ./install.sh
+```
+
+This creates a `feather` system user, installs the release to `/opt/feather` (Linux) or `/usr/local/feather` (FreeBSD), sets up the service file, and copies example config if none exists.
+
+Then enable and start:
+
+```bash
+# Linux (systemd)
+sudo systemctl enable feather
+sudo systemctl start feather
+
+# FreeBSD (rc.d)
+sudo sysrc feather_enable=YES
+sudo service feather start
+```
+
+To uninstall (config and logs are preserved):
+
+```bash
+sudo ./install.sh remove
+```
+
+### From source
+
+```bash
+make release
+cd _build/prod/rel/feather
+sudo ./install.sh
+```
+
+### Configuration
+
+After install, edit the config files in `/etc/feather` (Linux) or `/usr/local/etc/feather` (FreeBSD):
+
+- `server.exs` — server settings (bind address, port, TLS)
+- `pipeline.exs` — adapter pipeline (auth, routing, delivery, rate limiting)
+
+Override the config directory with the `FEATHER_CONFIG_FOLDER` env var.
+
+### Managing the service
+
+```bash
+# systemd
+sudo systemctl start|stop|restart|status feather
+journalctl -u feather -f
+
+# FreeBSD
+sudo service feather start|stop|status
+```
 
 ---
 
