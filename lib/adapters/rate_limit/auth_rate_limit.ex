@@ -67,13 +67,22 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   ## SMTP Responses
 
-  When the IP is blocked due to too many failures:
+  Blocked IPs are rejected at EHLO time with a proper 421 response:
 
       421 4.7.0 Too many authentication failures. Try again in N minutes.
 
-  When the failure limit is reached on the current attempt:
+  This works because gen_smtp supports custom error responses from the EHLO
+  callback but hardcodes `535 Authentication failed.` for all AUTH failures,
+  ignoring any custom error codes. By checking at EHLO time, blocked IPs are
+  rejected before they can attempt AUTH.
+
+  When the failure limit is reached on the current AUTH attempt:
 
       454 4.7.0 Too many authentication failures from your IP. Try again later.
+
+  Note: due to gen_smtp limitations, this 454 response is replaced by gen_smtp
+  with `535 Authentication failed.` The block is still effective — subsequent
+  connections will be rejected at EHLO with the proper 421 code.
 
   ## Storage Keys
 
@@ -114,6 +123,31 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
       block_duration: block_duration,
       exempt_ips: parsed_ips
     }
+  end
+
+  @impl true
+  def ehlo(_extensions, meta, state) do
+    if is_exempt?(meta, state) do
+      {:ok, meta, state}
+    else
+      ip_string = format_ip(Map.get(meta, :ip))
+      block_key = "authlimit:blocked:#{ip_string}"
+
+      case Feather.Storage.get(block_key) do
+        nil ->
+          {:ok, meta, state}
+
+        blocked_until ->
+          remaining = max(blocked_until - System.monotonic_time(:second), 0)
+
+          Logger.warning(
+            "AuthRateLimit: Rejecting EHLO from blocked IP #{ip_string} " <>
+              "(#{remaining}s remaining)"
+          )
+
+          {:halt, {:auth_blocked, remaining}, state}
+      end
+    end
   end
 
   @impl true
@@ -158,6 +192,12 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
       blocked_until ->
         remaining = max(blocked_until - System.monotonic_time(:second), 0)
+
+        Logger.warning(
+          "AuthRateLimit: Blocked AUTH from IP #{ip_string} " <>
+            "(#{remaining}s remaining)"
+        )
+
         {:halt, {:auth_blocked, remaining}, state}
     end
   end
