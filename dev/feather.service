@@ -14,7 +14,7 @@ RestartSec=5
 
 Environment=LANG=en_US.UTF-8
 Environment=RELEASE_NODE=feather@127.0.0.1
-# Environment=FEATHER_CONFIG_FOLDER=/etc/feather
+Environment=FEATHER_CONFIG_FOLDER=/etc/feather
 
 # Logging — stdout/stderr go to journald
 StandardOutput=journal
