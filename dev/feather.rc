@@ -1,0 +1,102 @@
+#!/bin/sh
+
+# PROVIDE: feather
+# REQUIRE: LOGIN DAEMON NETWORKING
+# KEYWORD: shutdown
+#
+# Add the following lines to /etc/rc.conf to enable feather:
+#
+#   feather_enable="YES"
+#
+# Optional rc.conf variables:
+#
+#   feather_dir="/usr/local/feather"       # Installation directory
+#   feather_user="feather"                 # User to run as
+#   feather_group="feather"                # Group to run as
+#   feather_config="/usr/local/etc/feather" # Config directory
+#   feather_log="/var/log/feather"         # Log directory
+
+. /etc/rc.subr
+
+name="feather"
+rcvar="${name}_enable"
+
+load_rc_config $name
+
+: ${feather_enable:="NO"}
+: ${feather_dir:="/usr/local/feather"}
+: ${feather_user:="feather"}
+: ${feather_group:="feather"}
+: ${feather_config:="/usr/local/etc/feather"}
+: ${feather_log:="/var/log/feather"}
+
+pidfile="/var/run/${name}.pid"
+feather_bin="${feather_dir}/bin/feather"
+
+export LANG="en_US.UTF-8"
+export RELEASE_NODE="feather@127.0.0.1"
+export FEATHER_CONFIG_FOLDER="${feather_config}"
+export RELEASE_TMP="${feather_dir}/tmp"
+
+start_cmd="${name}_start"
+stop_cmd="${name}_stop"
+status_cmd="${name}_status"
+extra_commands="status"
+
+feather_start()
+{
+    if feather_running; then
+        echo "${name} is already running."
+        return 0
+    fi
+
+    echo "Starting ${name}."
+    install -d -o "${feather_user}" -g "${feather_group}" "${feather_log}"
+    su -m "${feather_user}" -c "${feather_bin} daemon"
+
+    # Wait briefly for the node to come up, then capture the pid
+    sleep 1
+    if feather_running; then
+        feather_pid > "${pidfile}"
+        echo "${name} started."
+    else
+        echo "${name} failed to start."
+        return 1
+    fi
+}
+
+feather_stop()
+{
+    if ! feather_running; then
+        echo "${name} is not running."
+        return 0
+    fi
+
+    echo "Stopping ${name}."
+    su -m "${feather_user}" -c "${feather_bin} stop"
+    rm -f "${pidfile}"
+    echo "${name} stopped."
+}
+
+feather_status()
+{
+    if feather_running; then
+        _pid=$(feather_pid)
+        echo "${name} is running (pid ${_pid})."
+    else
+        echo "${name} is not running."
+        return 1
+    fi
+}
+
+feather_running()
+{
+    su -m "${feather_user}" -c "${feather_bin} pid" > /dev/null 2>&1
+}
+
+feather_pid()
+{
+    su -m "${feather_user}" -c "${feather_bin} pid" 2>/dev/null
+}
+
+run_rc_command "$1"

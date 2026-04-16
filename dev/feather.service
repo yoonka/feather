@@ -1,0 +1,32 @@
+[Unit]
+Description=Feather Mail Server
+After=network.target
+
+[Service]
+Type=exec
+User=feather
+Group=feather
+WorkingDirectory=/opt/feather
+ExecStart=/opt/feather/bin/feather start
+ExecStop=/opt/feather/bin/feather stop
+Restart=on-failure
+RestartSec=5
+
+Environment=LANG=en_US.UTF-8
+Environment=RELEASE_NODE=feather@127.0.0.1
+Environment=FEATHER_CONFIG_FOLDER=/etc/feather
+
+# Logging — stdout/stderr go to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=feather
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/feather /opt/feather
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
