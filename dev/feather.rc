@@ -53,18 +53,27 @@ feather_start()
     install -d -o "${feather_user}" -g "${feather_group}" "${feather_log}"
     install -d -o "${feather_user}" -g "${feather_group}" "${feather_dir}/tmp"
 
-    # feather is a system user with no real $HOME; point it at the install dir
-    # (which it owns) so the release boot script and run_erl have somewhere to
-    # write. Without this, su -m preserves root's HOME and the BEAM dies before
-    # the application logger comes up.
-    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} daemon"
+    # Use daemon(8) to fork the BEAM into the background, write its PID to
+    # ${pidfile}, redirect stdio to console.log, and (if feather_user != root)
+    # drop privileges. We invoke `feather start` (not `feather daemon`) so the
+    # BEAM stays attached to daemon(8) as a normal child — `feather stop`
+    # signals it cleanly and daemon(8) removes the pidfile on exit.
+    /usr/sbin/daemon \
+        -p "${pidfile}" \
+        -u "${feather_user}" \
+        -o "${feather_log}/console.log" \
+        env HOME="${feather_dir}" \
+            LANG="${LANG}" \
+            RELEASE_NODE="${RELEASE_NODE}" \
+            FEATHER_CONFIG_FOLDER="${FEATHER_CONFIG_FOLDER}" \
+            RELEASE_TMP="${RELEASE_TMP}" \
+            "${feather_bin}" start
 
     # Wait for the node to register with epmd. BEAM cold-start can take a few
     # seconds, so poll instead of using a fixed sleep.
     _i=0
     while [ $_i -lt 30 ]; do
         if feather_running; then
-            feather_pid > "${pidfile}"
             echo "${name} started."
             return 0
         fi
@@ -72,12 +81,8 @@ feather_start()
         _i=$((_i + 1))
     done
 
-    echo "${name} failed to start. Last lines from boot log:"
-    for _f in "${feather_dir}/tmp/log/erlang.log."*; do
-        [ -f "$_f" ] || continue
-        echo "---- $_f ----"
-        tail -40 "$_f" 2>/dev/null
-    done
+    echo "${name} failed to start. Last lines from console log:"
+    [ -f "${feather_log}/console.log" ] && tail -60 "${feather_log}/console.log"
     return 1
 }
 
@@ -85,13 +90,31 @@ feather_stop()
 {
     if ! feather_running; then
         echo "${name} is not running."
+        rm -f "${pidfile}"
         return 0
     fi
 
     echo "Stopping ${name}."
-    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} stop"
+    # Graceful shutdown via the release's own RPC. daemon(8) sees the BEAM
+    # exit and tears down on its own.
+    HOME="${feather_dir}" "${feather_bin}" stop 2>/dev/null || true
+
+    _i=0
+    while [ $_i -lt 20 ]; do
+        if ! feather_running; then
+            rm -f "${pidfile}"
+            echo "${name} stopped."
+            return 0
+        fi
+        sleep 1
+        _i=$((_i + 1))
+    done
+
+    # RPC didn't take it down — fall back to SIGTERM on the tracked pid.
+    echo "${name} did not stop within 20s; sending TERM to pid $(cat "${pidfile}" 2>/dev/null)."
+    [ -f "${pidfile}" ] && kill -TERM "$(cat "${pidfile}")" 2>/dev/null
+    sleep 2
     rm -f "${pidfile}"
-    echo "${name} stopped."
 }
 
 feather_status()
@@ -107,12 +130,12 @@ feather_status()
 
 feather_running()
 {
-    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} pid" > /dev/null 2>&1
+    HOME="${feather_dir}" "${feather_bin}" pid > /dev/null 2>&1
 }
 
 feather_pid()
 {
-    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} pid" 2>/dev/null
+    HOME="${feather_dir}" "${feather_bin}" pid 2>/dev/null
 }
 
 run_rc_command "$1"
