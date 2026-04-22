@@ -59,6 +59,7 @@ feather_start()
     # BEAM stays attached to daemon(8) as a normal child — `feather stop`
     # signals it cleanly and daemon(8) removes the pidfile on exit.
     /usr/sbin/daemon \
+        -f \
         -p "${pidfile}" \
         -u "${feather_user}" \
         -o "${feather_log}/console.log" \
