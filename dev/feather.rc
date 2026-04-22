@@ -51,17 +51,29 @@ feather_start()
 
     echo "Starting ${name}."
     install -d -o "${feather_user}" -g "${feather_group}" "${feather_log}"
-    su -m "${feather_user}" -c "${feather_bin} daemon"
+    install -d -o "${feather_user}" -g "${feather_group}" "${feather_dir}/tmp"
 
-    # Wait briefly for the node to come up, then capture the pid
-    sleep 1
-    if feather_running; then
-        feather_pid > "${pidfile}"
-        echo "${name} started."
-    else
-        echo "${name} failed to start."
-        return 1
-    fi
+    # feather is a system user with no real $HOME; point it at the install dir
+    # (which it owns) so the release boot script and run_erl have somewhere to
+    # write. Without this, su -m preserves root's HOME and the BEAM dies before
+    # the application logger comes up.
+    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} daemon"
+
+    # Wait for the node to register with epmd. BEAM cold-start can take a few
+    # seconds, so poll instead of using a fixed sleep.
+    _i=0
+    while [ $_i -lt 30 ]; do
+        if feather_running; then
+            feather_pid > "${pidfile}"
+            echo "${name} started."
+            return 0
+        fi
+        sleep 1
+        _i=$((_i + 1))
+    done
+
+    echo "${name} failed to start. See ${feather_dir}/tmp/log/erlang.log.* for details."
+    return 1
 }
 
 feather_stop()
@@ -72,7 +84,7 @@ feather_stop()
     fi
 
     echo "Stopping ${name}."
-    su -m "${feather_user}" -c "${feather_bin} stop"
+    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} stop"
     rm -f "${pidfile}"
     echo "${name} stopped."
 }
@@ -90,12 +102,12 @@ feather_status()
 
 feather_running()
 {
-    su -m "${feather_user}" -c "${feather_bin} pid" > /dev/null 2>&1
+    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} pid" > /dev/null 2>&1
 }
 
 feather_pid()
 {
-    su -m "${feather_user}" -c "${feather_bin} pid" 2>/dev/null
+    HOME="${feather_dir}" su -m "${feather_user}" -c "${feather_bin} pid" 2>/dev/null
 }
 
 run_rc_command "$1"
