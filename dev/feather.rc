@@ -41,7 +41,6 @@ export RELEASE_TMP="${feather_dir}/tmp"
 start_cmd="${name}_start"
 stop_cmd="${name}_stop"
 status_cmd="${name}_status"
-extra_commands="status"
 
 feather_start()
 {

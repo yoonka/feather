@@ -63,6 +63,7 @@ install_service() {
   case "$UNAME" in
     FreeBSD)
       info "Installing rc.d script"
+      install -d -m 0755 "${FEATHER_PREFIX}/etc/rc.d"
       install -m 0555 "${SCRIPT_DIR}/feather.rc" "${FEATHER_PREFIX}/etc/rc.d/feather"
       ;;
     *)
