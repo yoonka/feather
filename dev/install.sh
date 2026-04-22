@@ -8,18 +8,23 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Defaults — override with env vars
-FEATHER_USER="${FEATHER_USER:-feather}"
-FEATHER_GROUP="${FEATHER_GROUP:-feather}"
+# Defaults — override with env vars.
+# Default user is root because Feather needs to bind to privileged ports
+# (25, 465, 587). Set FEATHER_USER to a non-root user only if you've arranged
+# for unprivileged port access (e.g. mac_portacl, sysctl reservedhigh, or a
+# port redirector).
+FEATHER_USER="${FEATHER_USER:-root}"
 FEATHER_LOG="${FEATHER_LOG:-/var/log/feather}"
 
 UNAME="$(uname -s)"
 case "$UNAME" in
   FreeBSD)
+    FEATHER_GROUP="${FEATHER_GROUP:-wheel}"
     FEATHER_PREFIX="${FEATHER_PREFIX:-/usr/local}"
     FEATHER_CONF="${FEATHER_CONF:-${FEATHER_PREFIX}/etc/feather}"
     ;;
   *)
+    FEATHER_GROUP="${FEATHER_GROUP:-root}"
     FEATHER_PREFIX="${FEATHER_PREFIX:-/opt}"
     FEATHER_CONF="${FEATHER_CONF:-/etc/feather}"
     ;;
@@ -41,6 +46,9 @@ need_root() {
 # ── Create system user ──────────────────────────────────
 
 create_user() {
+  # Nothing to do when running as root.
+  [ "$FEATHER_USER" = "root" ] && return 0
+
   case "$UNAME" in
     FreeBSD)
       if ! pw usershow "$FEATHER_USER" >/dev/null 2>&1; then
@@ -105,9 +113,10 @@ do_install() {
   # Stop any running instance before overwriting binaries — otherwise cp will
   # fail with "Text file busy" on epmd / beam.smp from a previous install.
   if [ -x "${INSTALL_DIR}/bin/feather" ]; then
-    info "Stopping running ${FEATHER_USER} processes (if any)"
+    info "Stopping running ${name:-feather} (if any)"
     su -m "$FEATHER_USER" -c "${INSTALL_DIR}/bin/feather stop" >/dev/null 2>&1 || true
-    pkill -u "$FEATHER_USER" >/dev/null 2>&1 || true
+    # Match by executable path so we don't touch anything outside this install.
+    pkill -f "^${INSTALL_DIR}/erts-" >/dev/null 2>&1 || true
     # Give the kernel a moment to release the executables
     sleep 2
   fi

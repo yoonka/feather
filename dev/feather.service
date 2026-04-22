@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=exec
-User=feather
-Group=feather
+User=root
+Group=root
 WorkingDirectory=/opt/feather
 ExecStart=/opt/feather/bin/feather start
 ExecStop=/opt/feather/bin/feather stop

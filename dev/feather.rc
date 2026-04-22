@@ -11,8 +11,8 @@
 # Optional rc.conf variables:
 #
 #   feather_dir="/usr/local/feather"       # Installation directory
-#   feather_user="feather"                 # User to run as
-#   feather_group="feather"                # Group to run as
+#   feather_user="root"                    # User to run as (root needed for port <1024)
+#   feather_group="wheel"                  # Group to run as
 #   feather_config="/usr/local/etc/feather" # Config directory
 #   feather_log="/var/log/feather"         # Log directory
 
@@ -25,8 +25,8 @@ load_rc_config $name
 
 : ${feather_enable:="NO"}
 : ${feather_dir:="/usr/local/feather"}
-: ${feather_user:="feather"}
-: ${feather_group:="feather"}
+: ${feather_user:="root"}
+: ${feather_group:="wheel"}
 : ${feather_config:="/usr/local/etc/feather"}
 : ${feather_log:="/var/log/feather"}
 
