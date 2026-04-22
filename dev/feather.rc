@@ -34,7 +34,7 @@ pidfile="/var/run/${name}.pid"
 feather_bin="${feather_dir}/bin/feather"
 
 export LANG="en_US.UTF-8"
-export RELEASE_NODE="feather@127.0.0.1"
+export RELEASE_NODE="feather@localhost"
 export FEATHER_CONFIG_FOLDER="${feather_config}"
 export RELEASE_TMP="${feather_dir}/tmp"
 
@@ -72,7 +72,12 @@ feather_start()
         _i=$((_i + 1))
     done
 
-    echo "${name} failed to start. See ${feather_dir}/tmp/log/erlang.log.* for details."
+    echo "${name} failed to start. Last lines from boot log:"
+    for _f in "${feather_dir}/tmp/log/erlang.log."*; do
+        [ -f "$_f" ] || continue
+        echo "---- $_f ----"
+        tail -40 "$_f" 2>/dev/null
+    done
     return 1
 }
 

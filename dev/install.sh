@@ -102,6 +102,16 @@ do_install() {
 
   create_user
 
+  # Stop any running instance before overwriting binaries — otherwise cp will
+  # fail with "Text file busy" on epmd / beam.smp from a previous install.
+  if [ -x "${INSTALL_DIR}/bin/feather" ]; then
+    info "Stopping running ${FEATHER_USER} processes (if any)"
+    su -m "$FEATHER_USER" -c "${INSTALL_DIR}/bin/feather stop" >/dev/null 2>&1 || true
+    pkill -u "$FEATHER_USER" >/dev/null 2>&1 || true
+    # Give the kernel a moment to release the executables
+    sleep 2
+  fi
+
   info "Creating directories"
   install -d -o "$FEATHER_USER" -g "$FEATHER_GROUP" -m 0750 "$INSTALL_DIR"
   install -d -o "$FEATHER_USER" -g "$FEATHER_GROUP" -m 0750 "$FEATHER_CONF"
