@@ -1,23 +1,30 @@
 defmodule FeatherAdapters.RateLimit.AuthRateLimit do
   @moduledoc """
-  Brute force protection adapter that limits failed authentication attempts per IP.
+  Brute force protection adapter that limits authentication attempts per IP.
 
-  Tracks AUTH attempts per IP address and temporarily blocks IPs that exceed the
-  failure threshold, preventing password guessing attacks.
+  Tracks every AUTH attempt per IP address (password and OAuth bearer) and
+  temporarily blocks IPs that exceed the threshold, preventing password
+  guessing and credential-stuffing attacks.
 
   ## How It Works
 
-  - Each AUTH attempt increments a per-IP counter (via the `auth/3` callback)
-  - When the counter reaches `max_failures`, the IP is blocked for `block_duration` seconds
+  - Each AUTH attempt increments a per-IP counter (via the `auth/3` and
+    `auth_token/3` callbacks), regardless of whether the attempt succeeds.
+    Counting only failures would let an attacker who occasionally lands a
+    successful login (e.g. one valid account in a credential-stuffing run)
+    reset the counter and continue guessing indefinitely.
+  - When the counter exceeds `max_attempts`, the IP is blocked for
+    `block_duration` seconds (i.e. `max_attempts` attempts succeed; the
+    next one triggers the block — matching the semantics of the sibling
+    `ConnectionRateLimit` and `MessageRateLimit` adapters)
   - Blocked IPs receive a `421` rejection before credentials reach the auth adapter
-  - A successful authentication resets the counter (via the `mail/3` callback,
-    which only runs after the auth adapter has set `meta.authenticated`)
   - Counters and blocks automatically expire via TTL
 
   ## Configuration
 
-  * `:max_failures` — Maximum failed AUTH attempts before blocking (default: 5)
-  * `:time_window` — Window in seconds for counting failures (default: 300)
+  * `:max_attempts` — Maximum AUTH attempts before blocking (default: 5).
+    Also accepted as `:max_failures` for backwards compatibility.
+  * `:time_window` — Window in seconds for counting attempts (default: 300)
   * `:block_duration` — How long to block an IP after exceeding the limit, in seconds (default: 600)
   * `:exempt_ips` — List of IPs/CIDRs exempt from auth rate limiting (default: ["127.0.0.1", "::1"])
 
@@ -31,7 +38,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
   ### Basic Configuration
   ```elixir
   {FeatherAdapters.RateLimit.AuthRateLimit,
-   max_failures: 5,
+   max_attempts: 5,
    time_window: 300,
    block_duration: 600}
   ```
@@ -39,7 +46,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
   ### Strict Configuration
   ```elixir
   {FeatherAdapters.RateLimit.AuthRateLimit,
-   max_failures: 3,
+   max_attempts: 3,
    time_window: 120,
    block_duration: 1800}
   ```
@@ -56,7 +63,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
     # Block IPs with too many failed auth attempts
     {FeatherAdapters.RateLimit.AuthRateLimit,
-     max_failures: 5,
+     max_attempts: 5,
      time_window: 300,
      block_duration: 600},
 
@@ -69,16 +76,16 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   Blocked IPs are rejected at EHLO time with a proper 421 response:
 
-      421 4.7.0 Too many authentication failures. Try again in N minutes.
+      421 4.7.0 Too many authentication attempts. Try again in N minutes.
 
   This works because gen_smtp supports custom error responses from the EHLO
   callback but hardcodes `535 Authentication failed.` for all AUTH failures,
   ignoring any custom error codes. By checking at EHLO time, blocked IPs are
   rejected before they can attempt AUTH.
 
-  When the failure limit is reached on the current AUTH attempt:
+  When the limit is reached on the current AUTH attempt:
 
-      454 4.7.0 Too many authentication failures from your IP. Try again later.
+      454 4.7.0 Too many authentication attempts from your IP. Try again later.
 
   Note: due to gen_smtp limitations, this 454 response is replaced by gen_smtp
   with `535 Authentication failed.` The block is still effective — subsequent
@@ -99,7 +106,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   @impl true
   def init_session(opts) do
-    max_failures = Keyword.get(opts, :max_failures, 5)
+    max_attempts = Keyword.get(opts, :max_attempts) || Keyword.get(opts, :max_failures, 5)
     time_window = Keyword.get(opts, :time_window, 300)
     block_duration = Keyword.get(opts, :block_duration, 600)
     exempt_ips = Keyword.get(opts, :exempt_ips, ["127.0.0.1", "::1"])
@@ -118,7 +125,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
       |> Enum.reject(&is_nil/1)
 
     %{
-      max_failures: max_failures,
+      max_attempts: max_attempts,
       time_window: time_window,
       block_duration: block_duration,
       exempt_ips: parsed_ips
@@ -127,10 +134,8 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   @impl true
   def ehlo(_extensions, meta, state) do
-    if is_exempt?(meta, state) do
-      {:ok, meta, state}
-    else
-      ip_string = format_ip(Map.get(meta, :ip))
+    with false <- is_exempt?(meta, state),
+         ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
       block_key = "authlimit:blocked:#{ip_string}"
 
       case Feather.Storage.get(block_key) do
@@ -138,7 +143,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
           {:ok, meta, state}
 
         blocked_until ->
-          remaining = max(blocked_until - System.monotonic_time(:second), 0)
+          remaining = max(blocked_until - System.system_time(:second), 0)
 
           Logger.warning(
             "AuthRateLimit: Rejecting EHLO from blocked IP #{ip_string} " <>
@@ -147,38 +152,36 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
           {:halt, {:auth_blocked, remaining}, state}
       end
-    end
-  end
-
-  @impl true
-  def auth(_credentials, meta, state) do
-    if is_exempt?(meta, state) do
-      {:ok, meta, state}
     else
-      ip_string = format_ip(Map.get(meta, :ip))
-      check_and_track(ip_string, meta, state)
+      true -> {:ok, meta, state}
+      :unknown_ip -> {:ok, meta, state}
     end
   end
 
   @impl true
-  def mail(_from, meta, state) do
-    if Map.get(meta, :authenticated, false) do
-      ip_string = format_ip(Map.get(meta, :ip))
-      Feather.Storage.delete("authlimit:attempts:ip:#{ip_string}")
-      Feather.Storage.delete("authlimit:blocked:#{ip_string}")
-    end
+  def auth(_credentials, meta, state), do: do_check(meta, state)
 
-    {:ok, meta, state}
+  @impl true
+  def auth_token(_credentials, meta, state), do: do_check(meta, state)
+
+  defp do_check(meta, state) do
+    with false <- is_exempt?(meta, state),
+         ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
+      check_and_track(ip_string, meta, state)
+    else
+      true -> {:ok, meta, state}
+      :unknown_ip -> {:ok, meta, state}
+    end
   end
 
   @impl true
   def format_reason({:auth_blocked, remaining_seconds}) do
     minutes = max(div(remaining_seconds, 60), 1)
-    "421 4.7.0 Too many authentication failures. Try again in #{minutes} minutes."
+    "421 4.7.0 Too many authentication attempts. Try again in #{minutes} minutes."
   end
 
-  def format_reason({:auth_failures_exceeded, _max}) do
-    "454 4.7.0 Too many authentication failures from your IP. Try again later."
+  def format_reason({:auth_attempts_exceeded, _max}) do
+    "454 4.7.0 Too many authentication attempts from your IP. Try again later."
   end
 
   # Private functions
@@ -191,7 +194,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
         track_attempt(ip_string, meta, state)
 
       blocked_until ->
-        remaining = max(blocked_until - System.monotonic_time(:second), 0)
+        remaining = max(blocked_until - System.system_time(:second), 0)
 
         Logger.warning(
           "AuthRateLimit: Blocked AUTH from IP #{ip_string} " <>
@@ -207,9 +210,9 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
     case Feather.Storage.increment(counter_key, 1, ttl: state.time_window) do
       {:ok, count} ->
-        if count >= state.max_failures do
+        if count > state.max_attempts do
           block_key = "authlimit:blocked:#{ip_string}"
-          blocked_until = System.monotonic_time(:second) + state.block_duration
+          blocked_until = System.system_time(:second) + state.block_duration
           Feather.Storage.put(block_key, blocked_until, ttl: state.block_duration)
 
           Logger.warning(
@@ -217,7 +220,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
               "(#{count} auth attempts in #{state.time_window}s)"
           )
 
-          {:halt, {:auth_failures_exceeded, state.max_failures}, state}
+          {:halt, {:auth_attempts_exceeded, state.max_attempts}, state}
         else
           {:ok, meta, state}
         end
@@ -237,11 +240,15 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   defp is_exempt?(_meta, _state), do: false
 
-  defp format_ip(ip) when is_tuple(ip) do
-    ip
-    |> :inet.ntoa()
-    |> to_string()
-  end
+  defp format_ip({_, _, _, _} = ip), do: ip |> :inet.ntoa() |> to_string()
 
-  defp format_ip(ip), do: inspect(ip)
+  defp format_ip({_, _, _, _, _, _, _, _} = ip), do: ip |> :inet.ntoa() |> to_string()
+
+  defp format_ip(other) do
+    Logger.warning(
+      "AuthRateLimit: unexpected IP shape #{inspect(other)} — skipping rate limit for this session"
+    )
+
+    :unknown_ip
+  end
 end

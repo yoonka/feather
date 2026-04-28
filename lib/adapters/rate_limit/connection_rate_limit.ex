@@ -191,23 +191,21 @@ defmodule FeatherAdapters.RateLimit.ConnectionRateLimit do
   # Private functions
 
   defp check_connection(meta, state) do
-    if is_exempt?(meta, state) do
-      {:ok, meta, state}
-    else
-      ip_string = format_ip(Map.get(meta, :ip))
-
-      # Check if IP is currently blocked
+    with false <- is_exempt?(meta, state),
+         ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
       block_key = "connlimit:blocked:#{ip_string}"
 
       case Feather.Storage.get(block_key) do
         nil ->
-          # Not blocked - check connection rate
           check_rate(ip_string, meta, state)
 
         blocked_until ->
-          remaining = max(blocked_until - System.monotonic_time(:second), 0)
+          remaining = max(blocked_until - System.system_time(:second), 0)
           {:halt, {:connection_blocked, remaining}, state}
       end
+    else
+      true -> {:ok, meta, state}
+      :unknown_ip -> {:ok, meta, state}
     end
   end
 
@@ -219,7 +217,7 @@ defmodule FeatherAdapters.RateLimit.ConnectionRateLimit do
         if count > state.max_connections do
           # Block this IP
           block_key = "connlimit:blocked:#{ip_string}"
-          blocked_until = System.monotonic_time(:second) + state.block_duration
+          blocked_until = System.system_time(:second) + state.block_duration
           Feather.Storage.put(block_key, blocked_until, ttl: state.block_duration)
 
           Logger.warning("ConnectionRateLimit: Blocking IP #{ip_string} for #{state.block_duration}s (#{count} connections in #{state.time_window}s)")
@@ -244,13 +242,17 @@ defmodule FeatherAdapters.RateLimit.ConnectionRateLimit do
 
   defp is_exempt?(_meta, _state), do: false
 
-  defp format_ip(ip) when is_tuple(ip) do
-    ip
-    |> :inet.ntoa()
-    |> to_string()
-  end
+  defp format_ip({_, _, _, _} = ip), do: ip |> :inet.ntoa() |> to_string()
 
-  defp format_ip(ip), do: inspect(ip)
+  defp format_ip({_, _, _, _, _, _, _, _} = ip), do: ip |> :inet.ntoa() |> to_string()
+
+  defp format_ip(other) do
+    Logger.warning(
+      "ConnectionRateLimit: unexpected IP shape #{inspect(other)} — skipping rate limit for this session"
+    )
+
+    :unknown_ip
+  end
 
   defp format_time_window(seconds) when seconds < 60, do: "#{seconds}s"
   defp format_time_window(seconds) when seconds < 3600, do: "#{div(seconds, 60)}m"

@@ -63,7 +63,8 @@ defmodule Feather.Storage do
 
   - Reads are O(1) ETS lookups (extremely fast)
   - Writes are O(1) ETS inserts
-  - Increment is atomic via `:ets.update_counter/3`
+  - Increment is atomic via `:ets.update_counter/4` — concurrent callers
+    cannot lose updates
   - All operations are non-blocking except cleanup
 
   ## Configuration
@@ -220,27 +221,35 @@ defmodule Feather.Storage do
     ttl = Keyword.get(opts, :ttl)
     expiry = if ttl, do: System.monotonic_time(:second) + ttl, else: nil
 
+    # Lazy expiry: drop the entry if its expiry has passed so the atomic
+    # update_counter below seeds a fresh entry instead of incrementing a
+    # stale value. The lookup → delete is a small TOCTOU but converges:
+    # whichever caller deletes first, the next update_counter re-seeds.
     case :ets.lookup(@table_name, key) do
-      [{^key, value, old_expiry}] when is_number(value) ->
-        # Check if expired
-        if expired?(old_expiry) do
-          # Expired, reset to amount
-          :ets.insert(@table_name, {key, amount, expiry})
-          {:ok, amount}
-        else
-          # Not expired, increment
-          new_value = value + amount
-          :ets.insert(@table_name, {key, new_value, expiry})
-          {:ok, new_value}
-        end
+      [{^key, _value, old_expiry}] ->
+        if expired?(old_expiry), do: :ets.delete(@table_name, key)
 
-      [{^key, _value, _expiry}] ->
-        {:error, :not_numeric}
+      _ ->
+        :ok
+    end
 
-      [] ->
-        # Key doesn't exist, initialize
-        :ets.insert(@table_name, {key, amount, expiry})
-        {:ok, amount}
+    try do
+      # Atomic compare-and-increment. The default tuple is inserted iff the
+      # key is absent; otherwise position 2 is incremented in place. This is
+      # the only way to count concurrent attempts correctly — the previous
+      # lookup-then-insert implementation lost increments under load and
+      # weakened every rate limiter that depends on it.
+      new_value = :ets.update_counter(@table_name, key, {2, amount}, {key, 0, expiry})
+
+      # Sliding window: refresh expiry on each successful increment. Not
+      # atomic with update_counter; the resulting expiry is whichever caller
+      # writes last, which is fine since they're computed within microseconds
+      # of each other.
+      if expiry, do: :ets.update_element(@table_name, key, {3, expiry})
+
+      {:ok, new_value}
+    rescue
+      ArgumentError -> {:error, :not_numeric}
     end
   end
 
