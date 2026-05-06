@@ -42,5 +42,12 @@ defmodule FeatherAdapters.Adapter do
 
   @callback format_reason(reason :: term()) :: String.t()
 
-  @optional_callbacks ehlo: 3, helo: 3, auth: 3, mail: 3, rcpt: 3, data: 3, terminate: 3, format_reason: 1
+  @optional_callbacks ehlo: 3,
+                      helo: 3,
+                      auth: 3,
+                      mail: 3,
+                      rcpt: 3,
+                      data: 3,
+                      terminate: 3,
+                      format_reason: 1
 end

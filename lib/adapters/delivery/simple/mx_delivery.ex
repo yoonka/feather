@@ -229,6 +229,21 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   end
 
   @impl true
+  def format_reason({:remote_delivery_failed, {:failed_recipients, rcpts}}) do
+    list = Enum.map_join(rcpts, ", ", fn {rcpt, reason} -> "#{rcpt}: #{inspect(reason)}" end)
+    "451 4.4.1 Could not deliver to remote: #{list}"
+  end
+
+  def format_reason({:remote_delivery_failed, {:send, {:permanent_failure, host, message}}}) do
+    msg = to_string(message) |> String.trim()
+    "550 5.0.0 Remote server #{host} rejected: #{msg}"
+  end
+
+  def format_reason({:remote_delivery_failed, {:send, {:temporary_failure, host, message}}}) do
+    msg = to_string(message) |> String.trim()
+    "451 4.0.0 Remote server #{host} temporarily failed: #{msg}"
+  end
+
   def format_reason({:remote_delivery_failed, reason}),
     do: "451 4.4.1 Could not deliver to remote: #{inspect(reason)}"
 end
