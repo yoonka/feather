@@ -47,9 +47,14 @@ defmodule Feather.Session do
     # Only advertise AUTH when connection is secure:
     # - After STARTTLS has been negotiated (tls_active? = true)
     # - OR when using implicit TLS (tls_mode = :always)
+    # Advertised mechanisms are derived from the pipeline: surfaced when an
+    # adapter implements auth/3.
     smtp_extensions =
       if tls_active? or tls_mode == :always do
-        [{~c"AUTH", ~c"PLAIN LOGIN"} | smtp_extensions]
+        case auth_mechanisms(state) do
+          "" -> smtp_extensions
+          mechs -> [{~c"AUTH", String.to_charlist(mechs)} | smtp_extensions]
+        end
       else
         smtp_extensions
       end
@@ -137,18 +142,20 @@ defmodule Feather.Session do
 
             {:error, reason, _} ->
               Logger.warning(
-                "[SESSION] Delivery failed from #{from}: #{inspect(reason)}"
+                "[SESSION] Delivery failed from #{from}: #{reason}"
               )
+
+              {status, diagnostic} = extract_dsn_info(reason)
 
               Feather.DSN.notify_failure(from, to, reason,
                 hostname: hostname,
-                diagnostic_code: "smtp; 550 5.0.0 Delivery failed: #{inspect(reason)}",
-                status: "5.0.0"
+                diagnostic_code: diagnostic,
+                status: status
               )
           end
         end)
 
-        {:ok, "250 2.0.0 OK: message queued for delivery", delivery_state}
+        {:ok, "2.0.0 OK: message queued for delivery", delivery_state}
 
       {:error, reason} ->
         {:error, reason, state}
@@ -195,6 +202,13 @@ defmodule Feather.Session do
   def code_change(_old, state, _extra), do: {:ok, state}
 
 
+
+  # Build the AUTH mechanism list from the configured pipeline. PLAIN/LOGIN
+  # are advertised when any adapter implements `auth/3`.
+  defp auth_mechanisms(%{pipeline: pipeline}) do
+    has_password? = Enum.any?(pipeline, fn {mod, _} -> function_exported?(mod, :auth, 3) end)
+    if has_password?, do: "PLAIN LOGIN", else: ""
+  end
 
   defp step(phase, arg, %{pipeline: pipeline, meta: meta} = state) do
     Enum.reduce_while(pipeline, {[], meta}, fn {mod, adapter_state}, {acc, meta} ->
@@ -416,5 +430,30 @@ defmodule Feather.Session do
     else
       "550 #{inspect(reason)}"
     end
+  end
+
+  # Extracts DSN status code and diagnostic from a formatted reason string.
+  # e.g. "550 5.0.0 Remote server 10.60.5.4 rejected: 550 5.1.1 User unknown"
+  # returns {"5.0.0", "smtp; 550 5.1.1 User unknown"}
+  defp extract_dsn_info(reason) when is_binary(reason) do
+    # Try to extract enhanced status code (x.y.z) from the reason
+    status =
+      case Regex.run(~r/(\d\.\d+\.\d+)/, reason) do
+        [_, code] -> code
+        _ -> "5.0.0"
+      end
+
+    # Extract the SMTP diagnostic — the part after "rejected:" or "failed:"
+    diagnostic =
+      case Regex.run(~r/(?:rejected|failed):\s*(.+)$/s, reason) do
+        [_, msg] -> "smtp; #{String.trim(msg)}"
+        _ -> "smtp; #{reason}"
+      end
+
+    {status, diagnostic}
+  end
+
+  defp extract_dsn_info(reason) do
+    {"5.0.0", "smtp; #{inspect(reason)}"}
   end
 end

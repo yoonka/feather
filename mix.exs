@@ -18,10 +18,17 @@ defmodule FeatherMail.MixProject do
   end
 
   def application do
-    [
-      mod: {Feather.Application, []},
-      extra_applications: [:logger]
-    ]
+    base = [extra_applications: [:logger]]
+
+    # Tests exercise adapters in isolation — don't auto-start the full mail
+    # server (which requires /etc/feather config). Tests that need the app
+    # can call Application.ensure_all_started(:feather) with appropriate
+    # config setup.
+    if Mix.env() == :test do
+      base
+    else
+      [mod: {Feather.Application, []}] ++ base
+    end
   end
 
   defp docs do
@@ -90,7 +97,8 @@ defmodule FeatherMail.MixProject do
         "🔐 Authentication Adapters": [
           FeatherAdapters.Auth.EncryptedProvisionedPassword,
           FeatherAdapters.Auth.PamAuth,
-          FeatherAdapters.Auth.SimpleAuth
+          FeatherAdapters.Auth.SimpleAuth,
+          FeatherAdapters.Auth.ZitadelIdP
         ],
         "🔒 Access Adapters": [
           FeatherAdapters.Access.IPFilter,
@@ -139,7 +147,7 @@ defmodule FeatherMail.MixProject do
       {:jason, "~> 1.4.4"},
       {:bcrypt_elixir, "~> 3.3.0"},
       {:briefly, "~> 0.5.0"},
-      {:gen_smtp, "~> 1.3.0"},
+      {:gen_smtp, "~> 1.2"},
       {:iconv, "~> 1.0"},
       {:req, "~> 0.5"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false, warn_if_outdated: true},

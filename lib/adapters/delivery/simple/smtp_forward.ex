@@ -118,6 +118,17 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
   end
 
   @impl true
-  def format_reason({:forwarding_failed, reason}),
-    do: "451 4.4.1 SMTP forward failed: #{inspect(reason)}"
+  def format_reason({:forwarding_failed, {:send, {:permanent_failure, host, message}}}) do
+    msg = to_string(message) |> String.trim()
+    "550 5.0.0 Remote server #{host} rejected: #{msg}"
+  end
+
+  def format_reason({:forwarding_failed, {:send, {:temporary_failure, host, message}}}) do
+    msg = to_string(message) |> String.trim()
+    "451 4.0.0 Remote server #{host} temporarily failed: #{msg}"
+  end
+
+  def format_reason({:forwarding_failed, reason}) do
+    "451 4.4.1 SMTP forward failed: #{inspect(reason)}"
+  end
 end
