@@ -68,6 +68,19 @@ defmodule FeatherMail.MixProject do
         "📦 Adapters · Logging": [
           "guides/adapters/logging/mail_logger.md"
         ],
+        "📦 Adapters · Spam Filters": [
+          "guides/adapters/spam_filters/overview.md",
+          "guides/adapters/spam_filters/demo_pipeline.md",
+          "guides/adapters/spam_filters/dnsbl.md",
+          "guides/adapters/spam_filters/spf.md",
+          "guides/adapters/spam_filters/dkim.md",
+          "guides/adapters/spam_filters/dmarc.md",
+          "guides/adapters/spam_filters/rspamd.md",
+          "guides/adapters/spam_filters/spam_assassin.md",
+          "guides/adapters/spam_filters/rules.md",
+          "guides/adapters/spam_filters/spam_headers.md",
+          "guides/adapters/spam_filters/quarantine.md"
+        ],
         Tutorials: [
           "guides/how_to/set_up_msa.md"
         ]
@@ -110,7 +123,20 @@ defmodule FeatherMail.MixProject do
         ],
         "🪄 Transformers": [
           FeatherAdapters.Transformers.SimpleAliasResolver,
-          FeatherAdapters.Transformers.Transformable
+          FeatherAdapters.Transformers.Transformable,
+          FeatherAdapters.Transformers.SpamHeaders,
+          FeatherAdapters.Transformers.Quarantine
+        ],
+        "🛡️ Spam Filters": [
+          FeatherAdapters.SpamFilters,
+          FeatherAdapters.SpamFilters.Action,
+          FeatherAdapters.SpamFilters.DNSBL,
+          FeatherAdapters.SpamFilters.SPF,
+          FeatherAdapters.SpamFilters.DKIM,
+          FeatherAdapters.SpamFilters.DMARC,
+          FeatherAdapters.SpamFilters.Rspamd,
+          FeatherAdapters.SpamFilters.SpamAssassin,
+          FeatherAdapters.SpamFilters.Rules
         ]
       ]
     ]
