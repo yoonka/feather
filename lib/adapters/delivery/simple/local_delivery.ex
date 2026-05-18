@@ -21,6 +21,7 @@ defmodule FeatherAdapters.Delivery.SimpleLocalDelivery do
   """
 
   @behaviour FeatherAdapters.Adapter
+  use FeatherAdapters.Transformers.Transformable
 
   @impl true
   def init_session(opts) do

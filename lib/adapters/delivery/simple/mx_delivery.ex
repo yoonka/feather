@@ -73,6 +73,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
 
 
   @behaviour FeatherAdapters.Adapter
+  use FeatherAdapters.Transformers.Transformable
   alias Feather.Logger
 
   @impl true
