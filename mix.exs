@@ -81,6 +81,9 @@ defmodule FeatherMail.MixProject do
           "guides/adapters/spam_filters/spam_headers.md",
           "guides/adapters/spam_filters/quarantine.md"
         ],
+        "🪄 Adapters · Transformers": [
+          "guides/adapters/transformers/return_path_injector.md"
+        ],
         Tutorials: [
           "guides/how_to/set_up_msa.md"
         ]
@@ -122,6 +125,7 @@ defmodule FeatherMail.MixProject do
           FeatherAdapters.Logging.MailLogger
         ],
         "🪄 Transformers": [
+          FeatherAdapters.Transformers.ReturnPathInjector,
           FeatherAdapters.Transformers.SimpleAliasResolver,
           FeatherAdapters.Transformers.Transformable,
           FeatherAdapters.Transformers.SpamHeaders,

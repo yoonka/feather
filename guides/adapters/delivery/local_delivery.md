@@ -90,6 +90,19 @@ This ensures uniqueness and prevents file collisions.
 - Not intended for production mailbox delivery.
 - No IMAP, POP3, or user access management.
 - Basic storage only — no mailbox indexing or search.
+- Writes the raw message as received. RFC 5321 §4.4 requires the final
+  delivery MTA to inject a `Return-Path:` header from the SMTP envelope;
+  this adapter does not do that on its own. For delivered DSNs and any
+  other case where the `Return-Path` header is required, attach the
+  [`ReturnPathInjector`](return_path_injector.md) transformer:
+
+  ```elixir
+  {FeatherAdapters.Delivery.SimpleLocalDelivery,
+   path: "/var/mail",
+   transformers: [
+     {FeatherAdapters.Transformers.ReturnPathInjector, []}
+   ]}
+  ```
 
 ---
 
