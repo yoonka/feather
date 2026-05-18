@@ -82,8 +82,12 @@ end
               false -> {acc_raw, acc_meta}
             end
 
-          _, acc ->
-            acc
+          mod, {acc_raw, acc_meta} when is_atom(mod) ->
+            Code.ensure_loaded(mod)
+            case function_exported?(mod, :transform_data, 4) do
+              true -> mod.transform_data(acc_raw, acc_meta, state, [])
+              false -> {acc_raw, acc_meta}
+            end
         end)
       end
 
