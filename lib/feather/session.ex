@@ -19,7 +19,11 @@ defmodule Feather.Session do
       hostname: hostname,
       pipeline: pipeline,
       meta: %{ip: ip},
-      opts: options
+      opts: options,
+      # Tracks whether a MAIL FROM has been accepted in the current
+      # transaction. Used to enforce RFC 5321 §4.3.2 command ordering for
+      # RCPT — see handle_RCPT/2.
+      mail_from?: false
     }
 
     {:ok, banner, state}
@@ -104,7 +108,12 @@ defmodule Feather.Session do
   end
 
   @impl true
-  def handle_MAIL(from, state), do: step(:mail, from, state)
+  def handle_MAIL(from, state) do
+    case step(:mail, from, state) do
+      {:ok, new_state} -> {:ok, %{new_state | mail_from?: true}}
+      {:error, _reply, _state} = err -> err
+    end
+  end
 
   @impl :gen_smtp_server_session
   def handle_MAIL_extension(_extension, _state) do
@@ -116,7 +125,18 @@ defmodule Feather.Session do
   end
 
   @impl true
-  def handle_RCPT(to, state), do: step(:rcpt, to, state)
+  def handle_RCPT(to, state) do
+    # RFC 5321 §4.3.2: RCPT must follow a successful MAIL FROM. gen_smtp only
+    # rejects RCPT issued before HELO/EHLO (envelope == undefined); once EHLO
+    # initializes the envelope record, its general RCPT clause never re-checks
+    # whether MAIL was issued, so a RCPT-before-MAIL is wrongly accepted. We
+    # enforce the sequencing here.
+    if state.mail_from? do
+      step(:rcpt, to, state)
+    else
+      {:error, "503 5.5.1 Error: need MAIL command", state}
+    end
+  end
 
   @impl true
   def handle_RCPT_extension(_extension, _state) do
@@ -128,7 +148,9 @@ defmodule Feather.Session do
     case sanitize_headers(data) do
       {:ok, sanitized} ->
         meta = Map.merge(meta, %{from: from, to: to})
-        delivery_state = %{state | meta: meta}
+        # End of transaction — gen_smtp resets its envelope after DATA, so
+        # clear our MAIL FROM marker too (a new transaction must re-issue MAIL).
+        delivery_state = %{state | meta: meta, mail_from?: false}
         hostname = state.hostname
 
         # Accept message immediately, deliver asynchronously.
@@ -158,12 +180,12 @@ defmodule Feather.Session do
         {:ok, "2.0.0 OK: message queued for delivery", delivery_state}
 
       {:error, reason} ->
-        {:error, reason, state}
+        {:error, reason, %{state | mail_from?: false}}
     end
   end
 
   @impl true
-  def handle_RSET(state), do: {:ok, state}
+  def handle_RSET(state), do: {:ok, %{state | mail_from?: false}}
 
   @impl true
   def handle_STARTTLS(state) do
