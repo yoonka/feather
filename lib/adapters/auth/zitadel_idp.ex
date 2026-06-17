@@ -117,8 +117,7 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
          :ok <- check_email_verified(user_type, user, state),
          :ok <- check_role(user_id, state) do
       identity =
-        get_in(user, ["user", "human", "email", "email"]) ||
-          get_in(user, ["user", "username"]) ||
+        get_in(user, ["user", "username"]) ||
           sasl_user
 
       meta =
