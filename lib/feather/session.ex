@@ -260,20 +260,27 @@ defmodule Feather.Session do
   end
 
 
-  # Validates and sanitizes the header section of an RFC 5322 message.
+  # Validates the header section of an RFC 5322 message.
   #
   # Rejects messages with:
   # 1. NUL bytes or bare CR in headers (RFC 5322 §2.2 violation)
   # 2. Malformed header lines (invalid field name syntax)
   # 3. Bcc headers present in submission (MUA must strip before sending)
-  # 4. MTA-only headers that clients must not set (Return-Path, Received, etc.)
-  # 5. Duplicate singleton headers (RFC 5322 §3.6)
-  # 6. Continuation lines that look like injected headers
+  # 4. Duplicate singleton headers (RFC 5322 §3.6)
+  # 5. Continuation lines that look like injected headers
+  #
+  # Stripping of MTA-only / trust-bearing headers (Return-Path, Received,
+  # Authentication-Results, DKIM-Signature, X-Spam-*) is NOT done here — it
+  # is role-specific and lives in the configurable
+  # `FeatherAdapters.Transformers.HeaderSanitizer` transformer so that, e.g.,
+  # an internal MDA can preserve the Authentication-Results stamped by its
+  # trusted upstream MTA instead of discarding it. Submission/forwarding
+  # pipelines that accept untrusted mail MUST attach that transformer.
   defp sanitize_headers(data) do
-    {separator, parts} = split_headers_body(data)
+    {_separator, parts} = split_headers_body(data)
 
     case parts do
-      {headers_raw, body} ->
+      {headers_raw, _body} ->
         if String.contains?(headers_raw, "\0") do
           {:error, "550 5.6.0 Message rejected: NUL byte in header"}
         else
@@ -281,8 +288,7 @@ defmodule Feather.Session do
 
           with :ok <- validate_header_lines(lines),
                :ok <- validate_no_duplicate_singletons(lines) do
-            cleaned = strip_forbidden_headers(lines)
-            {:ok, Enum.join(cleaned, separator) <> separator <> separator <> body}
+            {:ok, data}
           end
         end
 
@@ -305,22 +311,6 @@ defmodule Feather.Session do
         {"\r\n", :no_body}
     end
   end
-
-  # Headers that submission clients must not set — these are added by MTAs,
-  # MDAs, or security infrastructure. Allowing them enables header injection
-  # attacks (bounce hijacking, auth bypass, spam filter evasion).
-  @forbidden_headers MapSet.new([
-    "return-path",          # RFC 5321 §4.4 — set by MTA from envelope
-    "received",             # RFC 5321 — set by each relay
-    "authentication-results", # RFC 8601 — set by receiving MTA
-    "dkim-signature",       # RFC 6376 — set by signing MTA
-    "arc-seal",             # RFC 8617 — ARC protocol
-    "arc-message-signature", # RFC 8617
-    "arc-authentication-results", # RFC 8617
-    "x-spam-status",        # SpamAssassin — set by spam filter
-    "x-spam-flag",          # SpamAssassin
-    "x-spam-score"          # SpamAssassin
-  ])
 
   defp validate_header_lines(lines) do
     result =
@@ -387,39 +377,6 @@ defmodule Feather.Session do
       <<c, rest::binary>> when c in [?\s, ?\t] ->
         trimmed = String.trim_leading(rest)
         Regex.match?(~r/^[A-Za-z][A-Za-z0-9\-]*:\s/, trimmed)
-
-      _ ->
-        false
-    end
-  end
-
-  # Silently strips headers that authenticated clients must not set.
-  # These are MTA/MDA-only headers; their presence in submission is
-  # either a misconfigured client or an injection attempt.
-  defp strip_forbidden_headers(lines) do
-    {kept, _skipping} =
-      Enum.reduce(lines, {[], false}, fn line, {acc, skipping_folded} ->
-        cond do
-          # Continuation line (starts with whitespace) — belongs to previous header
-          String.match?(line, ~r/^[ \t]/) ->
-            if skipping_folded, do: {acc, true}, else: {[line | acc], false}
-
-          forbidden_header?(line) ->
-            # Drop this header and any following continuation lines
-            {acc, true}
-
-          true ->
-            {[line | acc], false}
-        end
-      end)
-
-    Enum.reverse(kept)
-  end
-
-  defp forbidden_header?(line) do
-    case String.split(line, ":", parts: 2) do
-      [name, _value] ->
-        MapSet.member?(@forbidden_headers, String.downcase(name))
 
       _ ->
         false

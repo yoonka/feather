@@ -82,6 +82,11 @@ pipeline = [
   # --- Routing & delivery -------------------------------------------------
   {FeatherAdapters.Routing.ByDomain,
    transformers: [
+     # Drop trust headers a remote sender may have forged (forged X-Spam-*
+     # would otherwise let Sieve mis-sort) before we materialize our own.
+     {FeatherAdapters.Transformers.HeaderSanitizer,
+      headers: ~w(authentication-results received dkim-signature
+                  x-spam-status x-spam-flag x-spam-score)},
      # Materializes meta[:spam_headers] (X-Spam-Flag / Score / Tags) into
      # the outgoing message so Dovecot Sieve can sort into Junk.
      FeatherAdapters.Transformers.SpamHeaders,
