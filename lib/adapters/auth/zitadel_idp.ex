@@ -116,9 +116,15 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
          :ok <- verify_credential(user_type, user_id, credential, state),
          :ok <- check_email_verified(user_type, user, state),
          :ok <- check_role(user_id, state) do
+      # Use the Zitadel `username` as the authenticated identity rather than the
+      # email. The username is admin-assigned and stable; a user's email may be
+      # self-service editable, which — combined with localpart-based sender
+      # validation — would otherwise let a user authorize themselves to send as
+      # an arbitrary localpart by changing their own email. Falls back to the
+      # email, then the raw SASL name, when no username is present.
       identity =
-        get_in(user, ["user", "human", "email", "email"]) ||
-          get_in(user, ["user", "username"]) ||
+        get_in(user, ["user", "username"]) ||
+          get_in(user, ["user", "human", "email", "email"]) ||
           sasl_user
 
       meta =
