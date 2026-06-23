@@ -1,10 +1,20 @@
 defmodule FeatherMail.MixProject do
   use Mix.Project
 
+  # Single source of truth for the release version.
+  #
+  # At release time CI exports FEATHER_VERSION from the pushed git tag
+  # (e.g. "v1.0.97"), so the built artifact always matches the tag. For
+  # local/dev builds we fall back to the committed VERSION file. The leading
+  # "v" is stripped so the value is valid SemVer for Mix.
+  @version (System.get_env("FEATHER_VERSION") || File.read!("VERSION"))
+           |> String.trim()
+           |> String.trim_leading("v")
+
   def project do
     [
       app: :feather,
-      version: "1.0.0",
+      version: @version,
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       docs: &docs/0,
