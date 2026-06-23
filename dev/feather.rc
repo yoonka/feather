@@ -64,6 +64,7 @@ feather_start()
         -u "${feather_user}" \
         -o "${feather_log}/console.log" \
         env HOME="${feather_dir}" \
+            PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin" \
             LANG="${LANG}" \
             RELEASE_NODE="${RELEASE_NODE}" \
             FEATHER_CONFIG_FOLDER="${FEATHER_CONFIG_FOLDER}" \

@@ -24,3 +24,8 @@ erl_crash.dump
 
 # Ignore the mix.lock file.
 mix.lock
+
+
+# Zitadel API app keys — never commit
+dev/config/*-key.json
+dev/config/feather-api-key.json
