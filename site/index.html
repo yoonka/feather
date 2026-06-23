@@ -1,0 +1,1244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>FEATHER // MAIL.SERVER.PROTOCOL</title>
+<meta name="description" content="Feather — an adapter-based Elixir SMTP server. MSA/MTA/MDA split, pluggable everything." />
+<style>
+  /* ============================================================
+     FEATHER — cyberpunk terminal aesthetic
+     palette: void / phosphor / cyan / magenta / lime / amber
+     ============================================================ */
+
+  :root {
+    --void:        #05060a;
+    --void-2:      #0a0d12;
+    --void-3:      #11151c;
+    --grid:        rgba(126, 247, 163, 0.06);
+    --phosphor:    #7ef7a3;
+    --phosphor-dim:#3aa86a;
+    --phosphor-faint: rgba(126, 247, 163, 0.35);
+    --cyan:        #00f0ff;
+    --cyan-dim:    #008b97;
+    --magenta:     #ff2bd6;
+    --magenta-dim: #8c0772;
+    --lime:        #c8ff00;
+    --amber:       #ffb347;
+    --danger:      #ff4d4d;
+    --paper:       #d8e9d8;
+    --font-mono:   "Berkeley Mono", "JetBrains Mono", "IBM Plex Mono",
+                    "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --crt-curve:   0.6vmin;
+  }
+
+  *,
+  *::before,
+  *::after { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--void);
+    color: var(--phosphor);
+    font-family: var(--font-mono);
+    font-size: 15px;
+    line-height: 1.55;
+    overflow-x: hidden;
+    -webkit-font-smoothing: none;
+    text-rendering: geometricPrecision;
+  }
+
+  /* ---------- background layers: grid + scanlines + vignette ---------- */
+
+  body::before {
+    /* scanlines */
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 200;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0)   0px,
+        rgba(0, 0, 0, 0)   2px,
+        rgba(0, 0, 0, 0.28) 3px,
+        rgba(0, 0, 0, 0)   4px
+      );
+    mix-blend-mode: multiply;
+    animation: scanjitter 6.4s steps(40) infinite;
+  }
+
+  body::after {
+    /* vignette / CRT screen */
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 199;
+    background:
+      radial-gradient(
+        ellipse 130% 110% at 50% 50%,
+        rgba(0,0,0,0) 55%,
+        rgba(0,0,0,0.55) 85%,
+        rgba(0,0,0,0.9) 100%);
+  }
+
+  /* main grid backdrop */
+  .grid-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 56px 56px, 56px 56px;
+    background-position: -1px -1px;
+    mask-image: radial-gradient(ellipse 120% 90% at 50% 30%, #000 40%, transparent 95%);
+    animation: crawl 60s linear infinite;
+  }
+
+  /* drifting magenta haze */
+  .haze {
+    position: fixed;
+    inset: -20vh -10vw;
+    z-index: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(40vw 30vh at 18% 22%, rgba(255, 43, 214, 0.10), transparent 60%),
+      radial-gradient(50vw 35vh at 82% 78%, rgba(0, 240, 255, 0.10), transparent 60%),
+      radial-gradient(30vw 25vh at 50% 50%, rgba(126, 247, 163, 0.07), transparent 70%);
+    filter: blur(20px);
+    animation: float 18s ease-in-out infinite alternate;
+  }
+
+  @keyframes scanjitter {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-1px); }
+  }
+  @keyframes crawl {
+    from { background-position: -1px -1px, -1px -1px; }
+    to   { background-position: -1px 560px, -1px -1px; }
+  }
+  @keyframes float {
+    0%   { transform: translate(0,0); }
+    100% { transform: translate(-2vw,3vh); }
+  }
+
+  /* subtle global CRT flicker */
+  .crt {
+    position: relative;
+    z-index: 1;
+    animation: flicker 7s infinite;
+  }
+  @keyframes flicker {
+    0%, 96%, 100% { opacity: 1; }
+    97%   { opacity: 0.93; }
+    97.5% { opacity: 1; }
+    98%   { opacity: 0.96; }
+  }
+
+  ::selection {
+    background: var(--cyan);
+    color: var(--void);
+  }
+
+  a {
+    color: var(--cyan);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--cyan-dim);
+  }
+  a:hover {
+    color: var(--magenta);
+    border-bottom-color: var(--magenta);
+    text-shadow: 0 0 8px var(--magenta);
+  }
+
+  /* ---------- top status bar ---------- */
+
+  .statusbar {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: grid;
+    grid-template-columns: auto 1fr auto auto auto;
+    gap: 24px;
+    align-items: center;
+    padding: 10px 28px;
+    border-bottom: 1px solid var(--phosphor-dim);
+    background: linear-gradient(180deg, #0a0d12 0%, rgba(10,13,18,0.85) 100%);
+    backdrop-filter: blur(4px);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--phosphor-dim);
+  }
+  .statusbar .brand {
+    color: var(--phosphor);
+    letter-spacing: 0.32em;
+  }
+  .statusbar .brand b {
+    color: var(--magenta);
+    font-weight: normal;
+  }
+  .statusbar .ticker {
+    color: var(--phosphor-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 10.5px;
+  }
+  .statusbar .ticker em {
+    color: var(--lime);
+    font-style: normal;
+  }
+  .dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--phosphor);
+    box-shadow: 0 0 6px var(--phosphor);
+    margin-right: 6px;
+    animation: pulse 1.6s infinite ease-in-out;
+  }
+  .dot.cyan   { background: var(--cyan);    box-shadow: 0 0 6px var(--cyan); }
+  .dot.mag    { background: var(--magenta); box-shadow: 0 0 6px var(--magenta); }
+  .dot.amber  { background: var(--amber);   box-shadow: 0 0 6px var(--amber); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+
+  /* ---------- page layout ---------- */
+
+  main {
+    position: relative;
+    z-index: 1;
+    padding: 0 28px 80px;
+    max-width: 1480px;
+    margin: 0 auto;
+  }
+
+  section {
+    position: relative;
+    border: 1px solid var(--phosphor-dim);
+    background: linear-gradient(180deg, rgba(10,13,18,0.55), rgba(5,6,10,0.85));
+    margin-top: 32px;
+  }
+  section > header.section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--phosphor-dim);
+    background: repeating-linear-gradient(
+      90deg,
+      rgba(126,247,163,0.04),
+      rgba(126,247,163,0.04) 4px,
+      transparent 4px,
+      transparent 8px);
+    color: var(--phosphor);
+    font-size: 11px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+  section > header.section-head .label::before {
+    content: "// ";
+    color: var(--magenta);
+  }
+  section > header.section-head .meta {
+    color: var(--phosphor-dim);
+    font-size: 10.5px;
+    letter-spacing: 0.2em;
+  }
+
+  /* ---------- HERO ---------- */
+
+  .hero {
+    margin-top: 0;
+    border-top: none;
+    padding: 56px 36px 64px;
+    overflow: hidden;
+  }
+
+  .hero .pre {
+    color: var(--phosphor-dim);
+    font-size: 12px;
+    letter-spacing: 0.32em;
+    margin-bottom: 22px;
+  }
+  .hero .pre b {
+    color: var(--cyan);
+    font-weight: normal;
+  }
+
+  .hero h1 {
+    font-family: var(--font-mono);
+    font-weight: 900;
+    margin: 0;
+    color: var(--phosphor);
+    font-size: clamp(72px, 17vw, 240px);
+    line-height: 0.78;
+    letter-spacing: -0.04em;
+    text-shadow:
+      0 0 6px rgba(126, 247, 163, 0.55),
+      0 0 32px rgba(126, 247, 163, 0.25);
+    position: relative;
+    display: inline-block;
+  }
+
+  .hero h1 .glitch {
+    position: relative;
+    display: inline-block;
+  }
+  .hero h1 .glitch::before,
+  .hero h1 .glitch::after {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .hero h1 .glitch::before {
+    color: var(--magenta);
+    transform: translate(-3px, 0);
+    mix-blend-mode: screen;
+    animation: glitch-mag 4.5s infinite steps(1);
+    clip-path: polygon(0 0, 100% 0, 100% 38%, 0 38%);
+  }
+  .hero h1 .glitch::after {
+    color: var(--cyan);
+    transform: translate(3px, 0);
+    mix-blend-mode: screen;
+    animation: glitch-cyan 4.5s infinite steps(1);
+    clip-path: polygon(0 62%, 100% 62%, 100% 100%, 0 100%);
+  }
+  @keyframes glitch-mag {
+    0%, 92%, 100%  { transform: translate(-3px, 0);  opacity: 0.85; }
+    93%            { transform: translate(-8px, 2px); opacity: 1; }
+    94%            { transform: translate(2px, -3px); opacity: 1; }
+    95%            { transform: translate(-12px, 0);  opacity: 0.6; }
+    96%            { transform: translate(-3px, 0);   opacity: 1; }
+  }
+  @keyframes glitch-cyan {
+    0%, 92%, 100%  { transform: translate(3px, 0);   opacity: 0.85; }
+    93%            { transform: translate(10px, -2px); opacity: 1; }
+    94%            { transform: translate(-4px, 3px); opacity: 1; }
+    95%            { transform: translate(14px, 0);   opacity: 0.6; }
+    96%            { transform: translate(3px, 0);    opacity: 1; }
+  }
+
+  .hero .tagline {
+    margin-top: 28px;
+    color: var(--lime);
+    font-size: clamp(14px, 1.8vw, 22px);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    text-shadow: 0 0 10px rgba(200, 255, 0, 0.4);
+  }
+  .hero .tagline .slash { color: var(--magenta); }
+
+  .hero .blurb {
+    margin: 32px 0 0;
+    max-width: 720px;
+    color: var(--paper);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .hero .blurb b {
+    color: var(--cyan);
+    font-weight: normal;
+    text-shadow: 0 0 6px var(--cyan-dim);
+  }
+
+  .hero .cta-row {
+    margin-top: 36px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 22px;
+    border: 1px solid var(--phosphor);
+    color: var(--phosphor);
+    background: rgba(126, 247, 163, 0.06);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    cursor: pointer;
+    text-decoration: none;
+    border-bottom: 1px solid var(--phosphor);
+    transition: transform 60ms linear, background 120ms linear, color 120ms;
+    position: relative;
+  }
+  .btn:hover {
+    background: var(--phosphor);
+    color: var(--void);
+    border-color: var(--phosphor);
+    text-shadow: none;
+    transform: translate(-1px, -1px);
+    box-shadow: 3px 3px 0 var(--magenta);
+  }
+  .btn::before { content: "›"; color: var(--magenta); }
+  .btn:hover::before { color: var(--void); }
+
+  .btn.alt {
+    color: var(--cyan);
+    border-color: var(--cyan-dim);
+    background: rgba(0, 240, 255, 0.04);
+  }
+  .btn.alt::before { color: var(--cyan); }
+  .btn.alt:hover {
+    background: var(--cyan);
+    color: var(--void);
+    border-color: var(--cyan);
+    box-shadow: 3px 3px 0 var(--magenta);
+  }
+  .btn.alt:hover::before { color: var(--void); }
+
+  /* hero side rail */
+  .hero-grid {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 56px;
+    align-items: end;
+  }
+
+  .hero-side {
+    border-left: 1px dashed var(--phosphor-dim);
+    padding-left: 18px;
+    color: var(--phosphor-dim);
+    font-size: 11px;
+    line-height: 1.7;
+    letter-spacing: 0.06em;
+  }
+  .hero-side .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dotted rgba(126,247,163,0.15);
+  }
+  .hero-side .row span:first-child {
+    color: var(--phosphor-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+  }
+  .hero-side .row span:last-child {
+    color: var(--phosphor);
+  }
+  .hero-side .row.warn span:last-child  { color: var(--amber); }
+  .hero-side .row.good span:last-child  { color: var(--lime); }
+  .hero-side .row.mag span:last-child   { color: var(--magenta); }
+
+  @media (max-width: 900px) {
+    .hero-grid { grid-template-columns: 1fr; }
+    .hero-side { border-left: none; border-top: 1px dashed var(--phosphor-dim); padding-left: 0; padding-top: 16px; }
+  }
+
+  /* ---------- WHAT IT IS ---------- */
+
+  .what {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 0;
+  }
+  .what .body {
+    padding: 32px;
+    border-right: 1px solid var(--phosphor-dim);
+  }
+  .what .aside {
+    padding: 32px;
+    background:
+      repeating-linear-gradient(
+        45deg,
+        rgba(255,43,214,0.03),
+        rgba(255,43,214,0.03) 8px,
+        transparent 8px,
+        transparent 16px);
+  }
+  .what h2 {
+    font-size: 22px;
+    letter-spacing: 0.18em;
+    color: var(--phosphor);
+    text-transform: uppercase;
+    margin: 0 0 18px;
+  }
+  .what h2 span { color: var(--magenta); }
+  .what p {
+    color: var(--paper);
+    font-size: 14.5px;
+    line-height: 1.75;
+    margin: 0 0 14px;
+    max-width: 64ch;
+  }
+  .what p b { color: var(--cyan); font-weight: normal; text-shadow: 0 0 8px var(--cyan-dim); }
+  .what p em { font-style: normal; color: var(--lime); }
+
+  .what .aside-title {
+    color: var(--magenta);
+    font-size: 11px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .what .aside ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    color: var(--phosphor);
+    font-size: 13px;
+  }
+  .what .aside ul li {
+    padding: 6px 0;
+    border-bottom: 1px dashed rgba(126,247,163,0.15);
+    display: flex;
+    gap: 10px;
+  }
+  .what .aside ul li::before {
+    content: ">";
+    color: var(--magenta);
+  }
+
+  @media (max-width: 900px) {
+    .what { grid-template-columns: 1fr; }
+    .what .body { border-right: none; border-bottom: 1px solid var(--phosphor-dim); }
+  }
+
+  /* ---------- FEATURE GRID ---------- */
+
+  .features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--phosphor-dim);
+  }
+  .feature {
+    background: linear-gradient(180deg, var(--void-2), var(--void));
+    padding: 26px;
+    position: relative;
+    transition: background 180ms;
+  }
+  .feature:hover {
+    background: linear-gradient(180deg, rgba(126,247,163,0.05), var(--void));
+  }
+  .feature .num {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    color: var(--phosphor-dim);
+    font-size: 10.5px;
+    letter-spacing: 0.2em;
+  }
+  .feature .ascii {
+    color: var(--cyan);
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: pre;
+    margin-bottom: 18px;
+    text-shadow: 0 0 6px rgba(0,240,255,0.4);
+  }
+  .feature h3 {
+    color: var(--lime);
+    font-size: 15px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin: 0 0 10px;
+    text-shadow: 0 0 8px rgba(200,255,0,0.3);
+  }
+  .feature p {
+    color: var(--paper);
+    font-size: 13px;
+    line-height: 1.65;
+    margin: 0 0 14px;
+  }
+  .feature .tag {
+    display: inline-block;
+    margin-right: 6px;
+    margin-top: 4px;
+    padding: 3px 8px;
+    border: 1px solid var(--phosphor-dim);
+    color: var(--phosphor-dim);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .feature:hover .ascii { color: var(--magenta); }
+  .feature.alt .ascii { color: var(--magenta); }
+  .feature.alt:hover .ascii { color: var(--cyan); }
+
+  @media (max-width: 1100px) { .features { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px)  { .features { grid-template-columns: 1fr; } }
+
+  /* ---------- CODE / TERMINAL ---------- */
+
+  .terminal-wrap {
+    padding: 28px;
+    display: grid;
+    grid-template-columns: 1fr 1.3fr;
+    gap: 28px;
+    align-items: start;
+  }
+  .terminal-wrap .intro h2 {
+    font-size: 22px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--phosphor);
+    margin: 0 0 16px;
+  }
+  .terminal-wrap .intro h2 span { color: var(--magenta); }
+  .terminal-wrap .intro p {
+    color: var(--paper);
+    font-size: 14px;
+    line-height: 1.7;
+    margin: 0 0 14px;
+  }
+  .terminal-wrap .intro b { color: var(--cyan); font-weight: normal; text-shadow: 0 0 6px var(--cyan-dim); }
+  .terminal-wrap .intro .kicker {
+    color: var(--magenta);
+    font-size: 11px;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .terminal {
+    border: 1px solid var(--phosphor-dim);
+    background: #060a0d;
+    box-shadow:
+      inset 0 0 60px rgba(126,247,163,0.04),
+      0 0 0 1px rgba(0,0,0,0.4);
+    border-radius: var(--crt-curve);
+  }
+  .terminal .titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--phosphor-dim);
+    background: linear-gradient(180deg, #0b1018, #060a0d);
+    font-size: 10.5px;
+    letter-spacing: 0.16em;
+    color: var(--phosphor-dim);
+    text-transform: uppercase;
+  }
+  .terminal .titlebar .btn-dots {
+    display: flex;
+    gap: 6px;
+    margin-right: 8px;
+  }
+  .terminal .titlebar .btn-dots i {
+    width: 10px;
+    height: 10px;
+    border: 1px solid var(--phosphor-dim);
+    display: inline-block;
+  }
+  .terminal .titlebar .btn-dots i:nth-child(1) { background: var(--magenta); border-color: var(--magenta); }
+  .terminal .titlebar .btn-dots i:nth-child(2) { background: var(--amber);   border-color: var(--amber); }
+  .terminal .titlebar .btn-dots i:nth-child(3) { background: var(--lime);    border-color: var(--lime); }
+  .terminal .titlebar .filename { color: var(--phosphor); }
+  .terminal .titlebar .right { margin-left: auto; color: var(--phosphor-dim); }
+
+  .terminal pre {
+    margin: 0;
+    padding: 18px 20px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--paper);
+    overflow-x: auto;
+    text-shadow: 0 0 2px rgba(126,247,163,0.15);
+  }
+  .terminal pre .k { color: var(--magenta); }       /* keyword */
+  .terminal pre .at { color: var(--lime); }         /* atom */
+  .terminal pre .s { color: var(--cyan); }          /* string */
+  .terminal pre .m { color: var(--phosphor); }      /* module */
+  .terminal pre .c { color: var(--phosphor-dim); font-style: italic; } /* comment */
+  .terminal pre .n { color: var(--amber); }         /* number */
+  .terminal pre .p { color: var(--paper); }         /* punct */
+
+  @media (max-width: 900px) {
+    .terminal-wrap { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- LOG FOOTER ---------- */
+
+  .session {
+    margin-top: 32px;
+    padding: 0;
+    background: linear-gradient(180deg, #060a0d 0%, #04060a 100%);
+  }
+  .session .head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--phosphor-dim);
+    color: var(--phosphor);
+    font-size: 11px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+  .session .head .meta { color: var(--phosphor-dim); font-size: 10.5px; }
+  .session .head .dot { vertical-align: middle; }
+  .session .log {
+    height: 260px;
+    overflow: hidden;
+    padding: 14px 22px;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--paper);
+    position: relative;
+  }
+  .session .log::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(180deg, var(--void) 0%, transparent 14%, transparent 80%, var(--void) 100%);
+  }
+  .session .log .line {
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .session .log .ts { color: var(--phosphor-dim); }
+  .session .log .c-s { color: var(--cyan); }   /* client side */
+  .session .log .s-s { color: var(--lime); }   /* server side */
+  .session .log .ok  { color: var(--phosphor); }
+  .session .log .err { color: var(--magenta); }
+  .session .log .info { color: var(--amber); }
+
+  .cursor {
+    display: inline-block;
+    width: 10px;
+    height: 1.1em;
+    background: var(--phosphor);
+    vertical-align: -2px;
+    animation: blink 1s steps(2) infinite;
+    box-shadow: 0 0 8px var(--phosphor);
+  }
+  @keyframes blink { 50% { background: transparent; box-shadow: none; } }
+
+  /* ---------- bottom credits ---------- */
+
+  footer.credits {
+    margin: 48px auto 0;
+    padding: 32px 8px 0;
+    max-width: 1480px;
+    color: var(--phosphor-dim);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    border-top: 1px dashed var(--phosphor-dim);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  footer.credits .left b { color: var(--magenta); font-weight: normal; }
+  footer.credits .right span { margin-left: 16px; color: var(--phosphor); }
+
+  /* ---------- boot reveal ---------- */
+
+  .boot-reveal {
+    opacity: 0;
+    transform: translateY(8px);
+    animation: bootreveal 720ms cubic-bezier(.2,.7,.2,1) forwards;
+  }
+  .boot-reveal.d1 { animation-delay: 60ms; }
+  .boot-reveal.d2 { animation-delay: 160ms; }
+  .boot-reveal.d3 { animation-delay: 280ms; }
+  .boot-reveal.d4 { animation-delay: 420ms; }
+  .boot-reveal.d5 { animation-delay: 560ms; }
+  .boot-reveal.d6 { animation-delay: 700ms; }
+  @keyframes bootreveal {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* utility */
+  .mono { font-family: var(--font-mono); }
+  .nowrap { white-space: nowrap; }
+
+</style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="haze"></div>
+
+  <div class="crt">
+
+  <!-- ================= STATUS BAR ================= -->
+  <div class="statusbar">
+    <div class="brand"><b>▣</b> FEATHER//OS</div>
+    <div class="ticker" id="ticker">
+      <em>UPLINK</em> · receiving sigtraffic from <em>mx.maxlabmobile.com</em> · spf=<em>pass</em> · dkim=<em>pass</em> · dmarc=<em>pass</em>
+    </div>
+    <div><span class="dot cyan"></span>TLS 1.3</div>
+    <div><span class="dot"></span>NODE 03</div>
+    <div><span class="dot mag"></span><span id="clock">--:--:--</span></div>
+  </div>
+
+  <main>
+
+    <!-- ================= HERO ================= -->
+    <section class="hero">
+      <div class="hero-grid">
+        <div>
+          <div class="pre boot-reveal">
+            <b>&gt;_</b> BOOTSTRAP <b>OK</b> · LOADING <b>FEATHER.MAIL.SERVER</b> v0.<span id="ver">8</span>.0 ·
+            COMPILED IN <b>ELIXIR/OTP</b>
+          </div>
+
+          <h1 class="boot-reveal d1">
+            <span class="glitch" data-text="FEATHER">FEATHER</span>
+          </h1>
+
+          <div class="tagline boot-reveal d2">
+            <span class="slash">//</span>&nbsp;MAIL.SERVER.PROTOCOL
+          </div>
+
+          <p class="blurb boot-reveal d3">
+            An <b>adapter-based</b> Elixir mail server. The full transport graph
+            — <b>MSA</b>, <b>MTA</b>, <b>MDA</b> — split into composable pipelines you
+            wire together like a synth patch. Authentication, routing, spam
+            filtering, storage, TLS, observability: every block is a plug-in.
+            Drop in what you need. Swap what you don't.
+          </p>
+
+          <div class="cta-row boot-reveal d4">
+            <a class="btn" href="#code">view&nbsp;the&nbsp;config</a>
+            <a class="btn alt" href="https://github.com/yoonka/feather" target="_blank" rel="noopener">github&nbsp;//&nbsp;yoonka/feather</a>
+            <a class="btn alt" href="../docs/1-what-is-feather/overview.md">docs</a>
+          </div>
+        </div>
+
+        <aside class="hero-side boot-reveal d5">
+          <div class="row"><span>HOST</span><span>mta.maxlabmobile.com</span></div>
+          <div class="row good"><span>SESSION</span><span>ENCRYPTED</span></div>
+          <div class="row"><span>SPF</span><span>pass</span></div>
+          <div class="row"><span>DKIM</span><span>pass</span></div>
+          <div class="row good"><span>DMARC</span><span>pass</span></div>
+          <div class="row"><span>QUEUE</span><span id="q">00 / 00</span></div>
+          <div class="row warn"><span>UPTIME</span><span id="uptime">000:00:00</span></div>
+          <div class="row mag"><span>REGION</span><span>SECTOR-7</span></div>
+          <div class="row"><span>BUILD</span><span>0x<span id="hash">f3a1c0</span></span></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= WHAT.IS.THIS ================= -->
+    <section>
+      <header class="section-head">
+        <span class="label">WHAT.IS.THIS</span>
+        <span class="meta">FRAME 02 / 06</span>
+      </header>
+      <div class="what">
+        <div class="body">
+          <h2>NOT&nbsp;ANOTHER <span>POSTFIX</span></h2>
+          <p>
+            Most mail servers are <em>monoliths</em> with a thousand config knobs
+            and a <em>1990s</em> threat model. Feather is the opposite shape —
+            a thin, opinionated runtime that <b>calls into your code</b> for every
+            decision: who can authenticate, where a message routes, how it's
+            stored, what gets quarantined.
+          </p>
+          <p>
+            The same engine runs as a <b>submission agent</b> on :587, a <b>transfer
+            agent</b> on :25, or a <b>delivery agent</b> on a private port — different
+            pipelines, same primitives. The wire protocol is RFC; everything
+            above is yours.
+          </p>
+          <p>
+            Written in Elixir. Built on the BEAM. Tested under fire. The kind
+            of mail server you'd ship if you were building it for the <em>next</em>
+            forty years instead of recovering from the <em>last</em>.
+          </p>
+        </div>
+        <div class="aside">
+          <div class="aside-title">// designed for</div>
+          <ul>
+            <li>SaaS senders who need transactional mail to <em>actually arrive</em>.</li>
+            <li>Platforms hosting many tenants with isolated auth + storage.</li>
+            <li>Compliance shops auditing every byte on the wire.</li>
+            <li>Pentesters &amp; researchers wiring SMTP fuzzers.</li>
+            <li>Backend engineers who refuse to read another Postfix .cf.</li>
+            <li>Anyone who's ever lost a weekend to <em>Received-SPF</em>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= FEATURES ================= -->
+    <section>
+      <header class="section-head">
+        <span class="label">CAPABILITY.MATRIX</span>
+        <span class="meta">FRAME 03 / 06 · 6 MODULES</span>
+      </header>
+      <div class="features">
+
+        <div class="feature">
+          <div class="num">01</div>
+          <div class="ascii">┌─[ in ]─┐  ┌──┐  ┌──┐
+│ pipe   │─▶│fx│─▶│fx│
+└────────┘  └──┘  └──┘</div>
+          <h3>Adapter Pipeline</h3>
+          <p>
+            Each SMTP phase — <span class="mono" style="color:var(--cyan)">ehlo / auth / mail / rcpt / data</span> — runs
+            through an ordered list of adapters. Each adapter sees the message,
+            returns <span class="mono" style="color:var(--lime)">:ok</span> or
+            <span class="mono" style="color:var(--magenta)">:halt</span>.
+            Composition over configuration.
+          </p>
+          <span class="tag">behaviour</span>
+          <span class="tag">declarative</span>
+          <span class="tag">testable</span>
+        </div>
+
+        <div class="feature alt">
+          <div class="num">02</div>
+          <div class="ascii"> SPF · DKIM · DMARC
+ ─────────────────
+ ✓ ✓ ✓  →  header</div>
+          <h3>SPF / DKIM / DMARC</h3>
+          <p>
+            First-class auth-results adapters. Each check writes a structured
+            entry to <span class="mono" style="color:var(--cyan)">meta[:auth_results]</span>;
+            a transformer renders one RFC&nbsp;7601
+            <span class="mono" style="color:var(--lime)">Authentication-Results</span>
+            header on the delivered message.
+          </p>
+          <span class="tag">RFC 7601</span>
+          <span class="tag">RFC 7208</span>
+          <span class="tag">RFC 7489</span>
+        </div>
+
+        <div class="feature">
+          <div class="num">03</div>
+          <div class="ascii">[ MSA ]·587  →  submit
+[ MTA ]·025  →  transit
+[ MDA ]·LMTP →  deliver</div>
+          <h3>MSA / MTA / MDA Split</h3>
+          <p>
+            One codebase, three roles. Run them in one BEAM node or three;
+            different pipelines, different access policies, same observability.
+            No <em>shared</em> mailbox file, no implicit local delivery.
+          </p>
+          <span class="tag">submission</span>
+          <span class="tag">relay</span>
+          <span class="tag">delivery</span>
+        </div>
+
+        <div class="feature alt">
+          <div class="num">04</div>
+          <div class="ascii">╭─ Maildir ─╮  ╭─ S3 ─╮
+│  local    │  │ obj  │
+╰───────────╯  ╰──────╯</div>
+          <h3>Pluggable Storage</h3>
+          <p>
+            Mailbox-on-disk, object-store, append-only log — every storage
+            backend is just an adapter implementing four callbacks. Multi-tenant
+            isolation falls out for free.
+          </p>
+          <span class="tag">maildir</span>
+          <span class="tag">s3</span>
+          <span class="tag">custom</span>
+        </div>
+
+        <div class="feature">
+          <div class="num">05</div>
+          <div class="ascii">╔════════╗  ╔════════╗
+║ STARTTLS ║──║  cert  ║
+╚════════╝  ╚════════╝</div>
+          <h3>TLS / PKI</h3>
+          <p>
+            Strict modern TLS by default. STARTTLS on :587 / :25, implicit TLS
+            on :465. Certificates rotate without downtime. mTLS for service-to-service.
+            No more <em>"please send unencrypted"</em>.
+          </p>
+          <span class="tag">tls 1.3</span>
+          <span class="tag">mTLS</span>
+          <span class="tag">hot-reload</span>
+        </div>
+
+        <div class="feature alt">
+          <div class="num">06</div>
+          <div class="ascii">▁▁▂▃▄▅▆▇█  metrics
+  ━━━━━━━     traces
+  · · · ·     logs</div>
+          <h3>Observability</h3>
+          <p>
+            Structured logging through pluggable backends — console, file,
+            syslog, OpenTelemetry. Every adapter verdict is emitted as a
+            log line so you can grep your way through a delivery failure
+            at 3am.
+          </p>
+          <span class="tag">otel</span>
+          <span class="tag">syslog</span>
+          <span class="tag">structured</span>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ================= CODE TERMINAL ================= -->
+    <section id="code">
+      <header class="section-head">
+        <span class="label">PIPELINE.CONFIG</span>
+        <span class="meta">FRAME 04 / 06 · /etc/feather/pipeline.exs</span>
+      </header>
+
+      <div class="terminal-wrap">
+        <div class="intro">
+          <div class="kicker">// how it looks</div>
+          <h2>just a <span>list</span></h2>
+          <p>
+            A Feather pipeline is an Elixir list of <b>{Adapter, opts}</b>
+            tuples. Order matters — adapters run top-to-bottom, top to bottom.
+            Any one of them can stop the message and write a 5xx code with the
+            reason.
+          </p>
+          <p>
+            No DSL. No YAML. No <em>magic strings</em>. Just code — which means
+            you can <b>read it, test it, and version it</b> like the rest of your
+            service.
+          </p>
+          <p>
+            The example on the right is the actual inbound MTA pipeline used
+            on <span class="mono" style="color:var(--cyan)">mta.maxlabmobile.com</span> —
+            logger, backscatter guard, SPF/DKIM/DMARC, then forward to the MDA.
+          </p>
+        </div>
+
+        <div class="terminal" role="figure" aria-label="Elixir pipeline config">
+          <div class="titlebar">
+            <span class="btn-dots"><i></i><i></i><i></i></span>
+            <span class="filename">pipeline.exs</span>
+            <span class="right">elixir · 31L</span>
+          </div>
+<pre><span class="c"># /etc/feather/pipeline.exs — INBOUND :25</span>
+<span class="p">[</span>
+  <span class="p">{</span><span class="m">FeatherAdapters.Logging.MailLogger</span><span class="p">,</span>
+   <span class="at">backends:</span> <span class="p">[</span><span class="at">:console</span><span class="p">],</span> <span class="at">level:</span> <span class="at">:info</span><span class="p">},</span>
+
+  <span class="p">{</span><span class="m">FeatherAdapters.Access.BackscatterGuard</span><span class="p">,</span>
+   <span class="at">mode:</span> <span class="at">:strict</span><span class="p">,</span>
+   <span class="at">guards:</span> <span class="p">[</span><span class="m">FeatherAdapters.Access.BackscatterGuard.RcptDomain</span><span class="p">]},</span>
+
+  <span class="c"># RFC 7601 — record auth result, never block.</span>
+  <span class="p">{</span><span class="m">FeatherAdapters.AuthResults.SPF</span><span class="p">,</span>   <span class="at">on_fail:</span> <span class="at">:pass_through</span><span class="p">},</span>
+  <span class="p">{</span><span class="m">FeatherAdapters.AuthResults.DKIM</span><span class="p">,</span>  <span class="at">on_fail:</span> <span class="at">:pass_through</span><span class="p">},</span>
+  <span class="p">{</span><span class="m">FeatherAdapters.AuthResults.DMARC</span><span class="p">,</span> <span class="at">on_fail:</span> <span class="at">:pass_through</span><span class="p">},</span>
+
+  <span class="c"># Hand off to the local MDA.</span>
+  <span class="p">{</span><span class="m">FeatherAdapters.Delivery.SMTPForward</span><span class="p">,</span>
+   <span class="at">server:</span> <span class="s">"127.0.0.1"</span><span class="p">,</span> <span class="at">port:</span> <span class="n">2528</span><span class="p">,</span>
+   <span class="at">tls:</span> <span class="at">:never</span><span class="p">,</span>
+   <span class="at">transformers:</span> <span class="p">[</span>
+     <span class="p">{</span><span class="m">FeatherAdapters.Transformers.AuthenticationResults</span><span class="p">,</span>
+      <span class="at">authserv_id:</span> <span class="s">"mta.maxlabmobile.com"</span><span class="p">}</span>
+   <span class="p">]}</span>
+<span class="p">]</span></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SESSION LOG FOOTER ================= -->
+    <section class="session">
+      <header class="section-head">
+        <span class="label">LIVE.SESSION&nbsp;//&nbsp;TAIL&nbsp;-F</span>
+        <span class="meta">FRAME 05 / 06 · /var/log/feather/sessions.log · <span class="dot mag"></span>STREAMING</span>
+      </header>
+      <div class="log" id="sessionlog" aria-live="polite"></div>
+    </section>
+
+    <!-- ================= CREDITS ================= -->
+    <footer class="credits">
+      <div class="left">
+        © 2077 · YOONKA <b>//</b> FEATHER MAIL · BUILT WITH BEAM &amp; HOSTILITY
+      </div>
+      <div class="right">
+        <span>v0.8.0</span>
+        <span>0x<span id="hash2">f3a1c0</span></span>
+        <span>FRAME 06 / 06</span>
+      </div>
+    </footer>
+
+  </main>
+  </div>
+
+<script>
+(() => {
+  // ---------------- live clock ----------------
+  const clockEl = document.getElementById('clock');
+  const upEl    = document.getElementById('uptime');
+  const t0 = Date.now();
+  function pad(n, w = 2) { return String(n).padStart(w, '0'); }
+  function tick() {
+    const now = new Date();
+    clockEl.textContent =
+      pad(now.getUTCHours()) + ':' + pad(now.getUTCMinutes()) + ':' + pad(now.getUTCSeconds()) + ' UTC';
+    const up = Math.floor((Date.now() - t0) / 1000);
+    upEl.textContent = pad(Math.floor(up / 3600), 3) + ':' + pad(Math.floor((up % 3600) / 60)) + ':' + pad(up % 60);
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  // ---------------- random hash ----------------
+  const HEX = '0123456789abcdef';
+  function randHash(n) {
+    let s = '';
+    for (let i = 0; i < n; i++) s += HEX[Math.floor(Math.random() * 16)];
+    return s;
+  }
+  const h = randHash(6);
+  document.getElementById('hash').textContent = h;
+  document.getElementById('hash2').textContent = h;
+
+  // ---------------- ticker rotation ----------------
+  const tickerEl = document.getElementById('ticker');
+  const tickerStates = [
+    '<em>UPLINK</em> · receiving sigtraffic from <em>mx.maxlabmobile.com</em> · spf=<em>pass</em> · dkim=<em>pass</em> · dmarc=<em>pass</em>',
+    '<em>QUEUE</em> · 0 deferred · 0 active · 0 bounced · uptime nominal',
+    '<em>SECURITY</em> · TLS1.3 only · PFS·X25519 · 0 cipher downgrades · 0 abuse alerts',
+    '<em>NODE</em> · feather@beam-03 · OTP 27 · 64 schedulers · GC pressure low',
+    '<em>OBSERVE</em> · 1.2k msg/min · p99 5.4ms · saturation 12% · entropy ok',
+  ];
+  let ti = 0;
+  setInterval(() => {
+    ti = (ti + 1) % tickerStates.length;
+    tickerEl.innerHTML = tickerStates[ti];
+  }, 4500);
+
+  // ---------------- queue counter ----------------
+  const qEl = document.getElementById('q');
+  setInterval(() => {
+    const a = Math.floor(Math.random() * 5);
+    const d = Math.floor(Math.random() * 3);
+    qEl.textContent = pad(a) + ' / ' + pad(d);
+  }, 2000);
+
+  // ---------------- session log ticker ----------------
+  const sessions = [
+    [
+      { d:  60, t: 'info', text: '── session #{{HASH}} from 198.51.100.{{IP}} on :25 ──' },
+      { d: 320, t: 's-s',  text: 'S: 220 mta.maxlabmobile.com ESMTP Feather ready · {{TS}}' },
+      { d: 240, t: 'c-s',  text: 'C: EHLO mail.example.org' },
+      { d: 200, t: 's-s',  text: 'S: 250-mta.maxlabmobile.com Hello [198.51.100.{{IP}}]\nS: 250-STARTTLS\nS: 250-SIZE 52428800\nS: 250-8BITMIME\nS: 250 ENHANCEDSTATUSCODES' },
+      { d: 220, t: 'c-s',  text: 'C: STARTTLS' },
+      { d: 180, t: 's-s',  text: 'S: 220 2.0.0 Ready to start TLS' },
+      { d: 320, t: 'info', text: '*** TLS handshake · TLSv1.3 · TLS_AES_128_GCM_SHA256 · X25519 ***' },
+      { d: 240, t: 'c-s',  text: 'C: EHLO mail.example.org' },
+      { d: 200, t: 's-s',  text: 'S: 250 ENHANCEDSTATUSCODES' },
+      { d: 260, t: 'c-s',  text: 'C: MAIL FROM:<sender@example.org>' },
+      { d: 220, t: 's-s',  text: 'S: 250 2.1.0 Ok · [auth] method=spf result=pass' },
+      { d: 240, t: 'c-s',  text: 'C: RCPT TO:<testing@mta.maxlabmobile.com>' },
+      { d: 220, t: 's-s',  text: 'S: 250 2.1.5 Ok' },
+      { d: 240, t: 'c-s',  text: 'C: DATA' },
+      { d: 200, t: 's-s',  text: 'S: 354 End data with <CR><LF>.<CR><LF>' },
+      { d: 360, t: 'info', text: '*** receiving · 4.7 KB · 38 headers · DKIM-Signature: d=example.org ***' },
+      { d: 280, t: 'ok',   text: '[auth] method=dkim  result=pass header.d=example.org header.s=sel1' },
+      { d: 220, t: 'ok',   text: '[auth] method=dmarc result=pass header.from=example.org · aligned=spf+dkim' },
+      { d: 220, t: 'ok',   text: '[transform] +Authentication-Results · +Received-SPF · +Return-Path' },
+      { d: 240, t: 's-s',  text: 'S: 250 2.0.0 Ok: queued as 0x{{HASH}}' },
+      { d: 220, t: 'c-s',  text: 'C: QUIT' },
+      { d: 200, t: 's-s',  text: 'S: 221 2.0.0 Bye' },
+      { d: 700, t: 'info', text: '── session closed · duration 2.41s · 1 msg · 1 rcpt ──' },
+    ],
+    [
+      { d:  60, t: 'info', text: '── session #{{HASH}} from 203.0.113.{{IP}} on :25 ──' },
+      { d: 320, t: 's-s',  text: 'S: 220 mta.maxlabmobile.com ESMTP Feather ready · {{TS}}' },
+      { d: 240, t: 'c-s',  text: 'C: EHLO suspicious.spammer.tld' },
+      { d: 220, t: 's-s',  text: 'S: 250 mta.maxlabmobile.com' },
+      { d: 260, t: 'c-s',  text: 'C: MAIL FROM:<spoof@bank.example>' },
+      { d: 320, t: 'err',  text: '[auth] method=spf result=fail · domain of spoof@bank.example does NOT designate 203.0.113.{{IP}}' },
+      { d: 240, t: 's-s',  text: 'S: 550 5.7.1 Message rejected: spf verification failed' },
+      { d: 220, t: 'c-s',  text: 'C: QUIT' },
+      { d: 200, t: 's-s',  text: 'S: 221 2.0.0 Bye' },
+      { d: 800, t: 'info', text: '── session closed · rejected · 1 attempt ──' },
+    ],
+    [
+      { d:  60, t: 'info', text: '── delivery handoff to MDA · LMTP · localhost:2528 ──' },
+      { d: 280, t: 'c-s',  text: 'C: LHLO feather.mta' },
+      { d: 200, t: 's-s',  text: 'S: 250-mda.local greets feather.mta\nS: 250-PIPELINING\nS: 250-SIZE 52428800\nS: 250 ENHANCEDSTATUSCODES' },
+      { d: 260, t: 'c-s',  text: 'C: MAIL FROM:<sender@example.org>' },
+      { d: 200, t: 's-s',  text: 'S: 250 2.1.0 Ok' },
+      { d: 240, t: 'c-s',  text: 'C: RCPT TO:<testing@mta.maxlabmobile.com>' },
+      { d: 200, t: 's-s',  text: 'S: 250 2.1.5 Ok · maildir=/var/mail/testing/' },
+      { d: 280, t: 'c-s',  text: 'C: DATA' },
+      { d: 220, t: 'info', text: '*** writing · 4.7 KB → /var/mail/testing/new/{{HASH}}.eml ***' },
+      { d: 240, t: 'ok',   text: 'S: 250 2.0.0 Ok: delivered (Maildir)' },
+      { d: 220, t: 'c-s',  text: 'C: QUIT' },
+      { d: 200, t: 's-s',  text: 'S: 221 2.0.0 Bye' },
+      { d: 700, t: 'info', text: '── handoff complete · 1 msg stored ──' },
+    ],
+  ];
+
+  const logEl = document.getElementById('sessionlog');
+  function nowStamp() {
+    const d = new Date();
+    return d.getUTCFullYear() + '-' + pad(d.getUTCMonth()+1) + '-' + pad(d.getUTCDate()) +
+      'T' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ':' + pad(d.getUTCSeconds()) + 'Z';
+  }
+  function fill(s) {
+    return s
+      .replace(/{{HASH}}/g, randHash(6))
+      .replace(/{{IP}}/g,   String(Math.floor(Math.random() * 250) + 2))
+      .replace(/{{TS}}/g,   nowStamp());
+  }
+
+  function lineEl(kind, text) {
+    const div = document.createElement('div');
+    div.className = 'line';
+    const ts = document.createElement('span');
+    ts.className = 'ts';
+    ts.textContent = '[' + nowStamp() + '] ';
+    div.appendChild(ts);
+    const body = document.createElement('span');
+    body.className = kind;
+    body.textContent = fill(text);
+    div.appendChild(body);
+    return div;
+  }
+
+  let sessionIdx = 0;
+  let stepIdx = 0;
+
+  function pushNext() {
+    const session = sessions[sessionIdx];
+    const step = session[stepIdx];
+    logEl.appendChild(lineEl(step.t, step.text));
+
+    // trim if too long
+    while (logEl.childNodes.length > 60) {
+      logEl.removeChild(logEl.firstChild);
+    }
+    // scroll
+    logEl.scrollTop = logEl.scrollHeight;
+
+    stepIdx++;
+    if (stepIdx >= session.length) {
+      stepIdx = 0;
+      sessionIdx = (sessionIdx + 1) % sessions.length;
+    }
+    setTimeout(pushNext, step.d + Math.random() * 120);
+  }
+
+  // kickoff after boot reveal
+  setTimeout(pushNext, 900);
+
+  // ---------------- konami-ish: glitch on click ----------------
+  document.querySelector('.hero h1').addEventListener('click', (e) => {
+    e.currentTarget.classList.remove('boot-reveal', 'd1');
+    void e.currentTarget.offsetWidth;
+    e.currentTarget.classList.add('boot-reveal', 'd1');
+  });
+})();
+</script>
+</body>
+</html>

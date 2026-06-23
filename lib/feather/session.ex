@@ -153,31 +153,41 @@ defmodule Feather.Session do
         delivery_state = %{state | meta: meta, mail_from?: false}
         hostname = state.hostname
 
-        # Accept message immediately, deliver asynchronously.
-        # RFC 5321 §4.5.5 / RFC 3461 §4: once we return 250, we take
-        # responsibility for the message. If delivery fails, we MUST
-        # notify the sender via DSN.
-        Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
-          case step(:data, sanitized, delivery_state) do
-            {:ok, _} ->
-              Logger.info("[SESSION] Message delivered successfully from #{from}")
+        # Inspection/policy filters (logging, auth-results, spam scanning,
+        # content checks) run SYNCHRONOUSLY here, before we accept. A halt
+        # therefore becomes an inline 5xx on the DATA reply — we never accept
+        # spam/policy-rejected mail and then bounce it (backscatter).
+        case step(:data, sanitized, delivery_state) do
+          {:error, reply, rejected_state} ->
+            {:error, reply, rejected_state}
 
-            {:error, reason, _} ->
-              Logger.warning(
-                "[SESSION] Delivery failed from #{from}: #{reason}"
-              )
+          {:ok, accepted_state} ->
+            # Accepted. Delivery (routing + transformers + handoff) runs
+            # asynchronously: RFC 5321 §4.5.5 / RFC 3461 §4 — once we return
+            # 250 we own the message, so a *delivery* failure (not a policy
+            # rejection) MUST be reported to the sender via DSN.
+            Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
+              case step(:deliver, sanitized, accepted_state) do
+                {:ok, _} ->
+                  Logger.info("[SESSION] Message delivered successfully from #{from}")
 
-              {status, diagnostic} = extract_dsn_info(reason)
+                {:error, reason, _} ->
+                  Logger.warning(
+                    "[SESSION] Delivery failed from #{from}: #{reason}"
+                  )
 
-              Feather.DSN.notify_failure(from, to, reason,
-                hostname: hostname,
-                diagnostic_code: diagnostic,
-                status: status
-              )
-          end
-        end)
+                  {status, diagnostic} = extract_dsn_info(reason)
 
-        {:ok, "2.0.0 OK: message queued for delivery", delivery_state}
+                  Feather.DSN.notify_failure(from, to, reason,
+                    hostname: hostname,
+                    diagnostic_code: diagnostic,
+                    status: status
+                  )
+              end
+            end)
+
+            {:ok, "2.0.0 OK: message queued for delivery", accepted_state}
+        end
 
       {:error, reason} ->
         {:error, reason, %{state | mail_from?: false}}

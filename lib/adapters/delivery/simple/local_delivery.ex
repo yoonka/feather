@@ -29,7 +29,7 @@ defmodule FeatherAdapters.Delivery.SimpleLocalDelivery do
   end
 
   @impl true
-  def data(message, %{to: recipients} = meta, %{base_path: base_path} = state) do
+  def deliver(message, %{to: recipients} = meta, %{base_path: base_path} = state) do
     Enum.each(recipients, fn recipient ->
       user = recipient |> String.split("@") |> hd()
       dir = Path.join(base_path, user)

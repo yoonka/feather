@@ -39,7 +39,7 @@ defmodule FeatherAdapters.Delivery.SimpleRejectDelivery do
   def init_session(_opts), do: %{}
 
   @impl true
-  def data(_raw, _meta, state) do
+  def deliver(_raw, _meta, state) do
     {:halt, :delivery_rejected, state}
   end
 
