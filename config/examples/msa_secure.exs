@@ -60,6 +60,12 @@ pipeline = [
 
   # 5. Routing - Forward all authenticated mail to the MTA
   {FeatherAdapters.Routing.ByDomain,
+   # Strip trust headers an authenticated client must not set. This
+   # protection used to be enforced centrally by the session; it now lives
+   # here so each role controls it. Submission pipelines MUST keep it.
+   transformers: [
+     FeatherAdapters.Transformers.HeaderSanitizer
+   ],
    routes: %{
      # Forward everything to MTA for actual delivery
      :default => {FeatherAdapters.Delivery.SMTPForward,
