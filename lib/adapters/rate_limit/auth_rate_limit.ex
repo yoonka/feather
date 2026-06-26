@@ -9,10 +9,18 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
   ## How It Works
 
   - Each AUTH attempt increments a per-IP counter (via the `auth/3` and
-    `auth_token/3` callbacks), regardless of whether the attempt succeeds.
-    Counting only failures would let an attacker who occasionally lands a
-    successful login (e.g. one valid account in a credential-stuffing run)
-    reset the counter and continue guessing indefinitely.
+    `auth_token/3` callbacks). The increment happens *before* the auth adapter
+    runs (a failed auth halts the pipeline, so there is no post-auth hook to
+    count from), which also means a blocked IP is rejected at EHLO before any
+    credential is checked.
+  - Only *failed* attempts accumulate toward the block: when an authentication
+    succeeds, the per-IP counter is cleared on the next `MAIL FROM` (the first
+    command a legitimate client sends after AUTH), so a user's own successful
+    logins never push them toward a block. An IP that only ever fails keeps
+    accumulating until it trips the limit.
+  - Trade-off: an attacker who lands a valid account mid credential-stuffing
+    run resets their counter on that success. This is the intended behaviour
+    here — blocks target sustained *failures*, not raw attempt volume.
   - When the counter exceeds `max_attempts`, the IP is blocked for
     `block_duration` seconds (i.e. `max_attempts` attempts succeed; the
     next one triggers the block — matching the semantics of the sibling
@@ -163,6 +171,22 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   @impl true
   def auth_token(_credentials, meta, state), do: do_check(meta, state)
+
+  # Refund the IP's attempt counter once authentication has succeeded. MAIL FROM
+  # is the first command a legitimate client issues after a successful AUTH, and
+  # `meta.authenticated` is set by every auth adapter on success — so clearing
+  # here means only failed attempts (which halt before MAIL) stick to the IP.
+  @impl true
+  def mail(_from, meta, state) do
+    if Map.get(meta, :authenticated) do
+      with false <- is_exempt?(meta, state),
+           ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
+        Feather.Storage.delete("authlimit:attempts:ip:#{ip_string}")
+      end
+    end
+
+    {:ok, meta, state}
+  end
 
   defp do_check(meta, state) do
     with false <- is_exempt?(meta, state),
