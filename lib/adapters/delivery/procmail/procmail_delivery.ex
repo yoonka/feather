@@ -81,14 +81,14 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
   end
 
   @impl true
-  def data(raw, %{to: recipients} = meta, state) when is_list(recipients) do
-    case deliver(raw, recipients, state) do
+  def deliver(raw, %{to: recipients} = meta, state) when is_list(recipients) do
+    case deliver_all(raw, recipients, state) do
       :ok -> {:ok, meta, state}
       {:error, reason} -> {:halt, reason, state}
     end
   end
 
-  def data(_raw, _meta, state),
+  def deliver(_raw, _meta, state),
     do: {:halt, {:invalid_recipients, "Expected meta[:to] to be a list"}, state}
 
   # ——— Internals ———
@@ -98,13 +98,13 @@ defmodule FeatherAdapters.Delivery.ProcmailDelivery do
     path
   end
 
-  defp deliver(raw, recipients, %{rcfile: nil} = st) do
+  defp deliver_all(raw, recipients, %{rcfile: nil} = st) do
     recipients
     |> Enum.map(&deliver_one_per_user(&1, raw, st))
     |> first_error_or_ok()
   end
 
-  defp deliver(raw, recipients, %{rcfile: _rcfile, batch: false} = st) do
+  defp deliver_all(raw, recipients, %{rcfile: _rcfile, batch: false} = st) do
     # Rcfile once per recipient (export RCPT for recipes if useful)
     recipients
     |> Enum.map(&deliver_one_per_user(&1, raw, st))

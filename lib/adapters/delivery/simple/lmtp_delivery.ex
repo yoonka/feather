@@ -113,7 +113,7 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   end
 
   @impl true
-  def data(rfc822, %{from: from, to: recipients} = meta, state) do
+  def deliver(rfc822, %{from: from, to: recipients} = meta, state) do
     mailbox = Map.get(meta, :mailbox, "INBOX")
 
     case deliver_lmtp(from, Enum.reverse(recipients), rfc822, state, mailbox: mailbox) do

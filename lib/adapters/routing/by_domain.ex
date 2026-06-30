@@ -51,7 +51,7 @@ defmodule FeatherAdapters.Routing.ByDomain do
   end
 
   @impl true
-  def data(message,  meta, %{routes: routes} = state) do
+  def deliver(message,  meta, %{routes: routes} = state) do
 
     recipients = Map.get(meta, :to, [])
     from = Map.get(meta, :from)
@@ -61,11 +61,11 @@ defmodule FeatherAdapters.Routing.ByDomain do
         Map.get(routes, domain, Map.get(routes, :default))
       end)
 
-    # For each adapter, call its data/3 method
+    # For each adapter, call its deliver/3 method
     results =
       Enum.map(grouped, fn {{adapter_mod, opts}, rcpts} ->
         state = adapter_mod.init_session(opts)
-        adapter_mod.data(message, %{from: from, to: rcpts}, state)
+        adapter_mod.deliver(message, %{from: from, to: rcpts}, state)
       end)
 
     case Enum.find(results, fn r -> match?({:halt, _, _}, r) end) do

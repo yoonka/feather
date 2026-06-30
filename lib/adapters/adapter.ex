@@ -12,6 +12,21 @@ defmodule FeatherAdapters.Adapter do
   Each callback returns:
     - `{:ok, updated_meta, updated_state}` to continue
     - `{:halt, reason, updated_state}` to reject the message
+
+  ## `data/3` vs `deliver/3`
+
+  The DATA phase is split into two stages so that content/policy rejections
+  surface as an inline SMTP `5xx` rather than an accept-then-bounce (backscatter):
+
+    - `data/3` — inspection/policy (logging, auth-results, spam scanning,
+      content checks). Runs **synchronously before** the `250` reply, so a
+      `{:halt, …}` becomes the DATA reply. Adapters that may reject a message
+      implement this.
+    - `deliver/3` — transformation + handoff (routing, aliasing, signing, the
+      actual delivery to MDA/relay/MX). Runs **asynchronously after** the `250`;
+      the server owns the message at that point, so a failure is reported to the
+      sender via DSN (RFC 5321 §4.5.5 / RFC 3461 §4). Delivery/routing adapters
+      implement this.
   """
 
   @type meta :: Feather.Types.meta()
@@ -37,6 +52,9 @@ defmodule FeatherAdapters.Adapter do
   @callback data(rfc822 :: binary(), meta, state) ::
               {:ok, meta, state} | {:halt, reason :: term(), state}
 
+  @callback deliver(rfc822 :: binary(), meta, state) ::
+              {:ok, meta, state} | {:halt, reason :: term(), state}
+
   @callback terminate(reason :: term(), meta, state) ::
               any()
 
@@ -48,6 +66,7 @@ defmodule FeatherAdapters.Adapter do
                       mail: 3,
                       rcpt: 3,
                       data: 3,
+                      deliver: 3,
                       terminate: 3,
                       format_reason: 1
 end

@@ -15,7 +15,7 @@ defmodule FeatherAdapters.Delivery.ConsolePrintDelivery do
   end
 
   @impl true
-  def data(raw, %{from: from, to: recipients} = meta, state) do
+  def deliver(raw, %{from: from, to: recipients} = meta, state) do
     Logger.info("""
     ========================================
     📧 Received Email

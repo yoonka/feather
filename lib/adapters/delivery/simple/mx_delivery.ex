@@ -86,7 +86,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   end
 
   @impl true
-  def data(raw, %{from: from, to: recipients} = meta, state) do
+  def deliver(raw, %{from: from, to: recipients} = meta, state) do
     results =
       recipients
       |> Enum.group_by(&domain_of/1)

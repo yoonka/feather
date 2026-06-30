@@ -33,7 +33,7 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
   end
 
   @impl true
-  def data(raw, %{to: recipients} = meta, state) when is_list(recipients) do
+  def deliver(raw, %{to: recipients} = meta, state) when is_list(recipients) do
     folder = meta[:folder]
     binary_path = state.binary_path
 
@@ -46,7 +46,7 @@ defmodule FeatherAdapters.Delivery.DovecotLDADelivery do
     end
   end
 
-  def data(_raw, _meta, state),
+  def deliver(_raw, _meta, state),
     do: {:halt, {:invalid_recipients, "Expected meta[:to] to be a list"}, state}
 
   defp deliver_one(recipient, folder, raw, binary_path) do

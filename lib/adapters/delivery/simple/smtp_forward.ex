@@ -72,7 +72,7 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
   end
 
   @impl true
-  def data(raw, %{from: from, to: rcpts} = meta, %{opts: opts} = state) do
+  def deliver(raw, %{from: from, to: rcpts} = meta, %{opts: opts} = state) do
     case deliver_smtp(from, rcpts, raw, opts) do
       :ok ->
         {:ok, meta, state}
