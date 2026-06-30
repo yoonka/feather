@@ -123,12 +123,12 @@ end
       end
 
     injects =
-      if Module.defines?(env.module, {:data, 3}) do
+      if Module.defines?(env.module, {:deliver, 3}) do
         [
           quote do
-            defoverridable [data: 3]
+            defoverridable [deliver: 3]
 
-            def data(raw, meta, state) do
+            def deliver(raw, meta, state) do
               meta = transform_meta(meta, state)
               {raw, meta} = transform_data(raw, meta, state)
               super(raw, meta, state)
