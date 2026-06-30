@@ -24,26 +24,32 @@ defmodule FeatherAdapters.Access.BackscatterGuard.AliasFile do
   ## Options
 
     * `:path` — path to the alias file (required)
-    * `:domain` — authoritative domain; matches both `alias` and `alias@domain`
+    * `:domains` — (optional) list of domains this guard is authoritative for.
+      Matches both bare `alias` and `alias@domain`. Recipients for any other
+      domain return `:skip` so a sibling guard (or the guard `:mode`) decides.
+      Omit to check every recipient regardless of domain. The legacy singular
+      `:domain` (a single string) is also accepted.
 
   ## Examples
 
       {FeatherAdapters.Access.BackscatterGuard.AliasFile,
        path: "/etc/aliases",
-       domain: "example.com"}
+       domains: ["example.com"]}
 
   Accepts:
     - `postmaster` (bare alias)
     - `postmaster@example.com` (with matching domain)
 
   Rejects:
-    - `postmaster@other.com` (domain mismatch)
     - `unknown@example.com` (not in file)
+
+  Skips (sibling guard / mode decides):
+    - `postmaster@other.com` (domain not in `:domains`)
   """
 
   def valid_recipient?(address, opts) do
     path = Keyword.fetch!(opts, :path)
-    domain = Keyword.get(opts, :domain)
+    domains = normalize_domains(opts)
 
     aliases = load_aliases(path)
 
@@ -52,11 +58,21 @@ defmodule FeatherAdapters.Access.BackscatterGuard.AliasFile do
         Map.has_key?(aliases, localpart)
 
       {localpart, addr_domain} ->
-        if domain_match?(addr_domain, domain) do
+        if domain_match?(addr_domain, domains) do
           Map.has_key?(aliases, localpart)
         else
           :skip
         end
+    end
+  end
+
+  # Accepts the plural `:domains` list (preferred) or the legacy singular
+  # `:domain` string. Returns a downcased MapSet, or nil to mean "all domains".
+  defp normalize_domains(opts) do
+    case Keyword.get(opts, :domains) || Keyword.get(opts, :domain) do
+      nil -> nil
+      domain when is_binary(domain) -> MapSet.new([String.downcase(domain)])
+      domains when is_list(domains) -> MapSet.new(domains, &String.downcase/1)
     end
   end
 
@@ -68,7 +84,7 @@ defmodule FeatherAdapters.Access.BackscatterGuard.AliasFile do
   end
 
   defp domain_match?(_addr_domain, nil), do: true
-  defp domain_match?(addr_domain, domain), do: addr_domain == String.downcase(domain)
+  defp domain_match?(addr_domain, domains), do: MapSet.member?(domains, addr_domain)
 
   defp load_aliases(path) do
     case File.read(path) do
