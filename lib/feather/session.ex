@@ -100,7 +100,15 @@ defmodule Feather.Session do
 
   @impl true
   def handle_AUTH(_type, username, password, state) do
-    step(:auth, {username, password}, state)
+    case step(:auth, {username, password}, state) do
+      {:ok, new_state} = result ->
+        notify_auth_result(:ok, {username, password}, new_state)
+        result
+
+      {:error, _reply, new_state} = result ->
+        notify_auth_result(:error, {username, password}, new_state)
+        result
+    end
   end
 
   def handle_MAIL(from, {:ok, state}) do
@@ -240,6 +248,21 @@ defmodule Feather.Session do
   defp auth_mechanisms(%{pipeline: pipeline}) do
     has_password? = Enum.any?(pipeline, fn {mod, _} -> function_exported?(mod, :auth, 3) end)
     if has_password?, do: "PLAIN LOGIN", else: ""
+  end
+
+  # After an AUTH command resolves, inform adapters of the outcome (`:ok` or
+  # `:error`) so outcome-sensitive adapters can react — e.g. AuthRateLimit,
+  # which counts only failed logins. This is the only point where the auth
+  # result is known: `step(:auth, ...)` halts on the first rejecting adapter, so
+  # an upstream adapter cannot otherwise observe a downstream auth failure.
+  # Fire-and-forget like terminate/3: state changes are not threaded back, so
+  # such adapters must persist via Feather.Storage.
+  defp notify_auth_result(result, credentials, %{pipeline: pipeline, meta: meta}) do
+    Enum.each(pipeline, fn {mod, adapter_state} ->
+      if function_exported?(mod, :auth_result, 4) do
+        mod.auth_result(result, credentials, meta, adapter_state)
+      end
+    end)
   end
 
   defp step(phase, arg, %{pipeline: pipeline, meta: meta} = state) do
