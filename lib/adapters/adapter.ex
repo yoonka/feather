@@ -43,6 +43,13 @@ defmodule FeatherAdapters.Adapter do
   @callback auth({username :: String.t(), password :: String.t()}, meta, state) ::
               {:ok, meta, state} | {:halt, reason :: term(), state}
 
+  @callback auth_result(
+              result :: :ok | :error,
+              credentials :: {username :: String.t(), password :: String.t()},
+              meta,
+              state
+            ) :: any()
+
   @callback mail(from :: String.t(), meta, state) ::
               {:ok, meta, state} | {:halt, reason :: term(), state}
 
@@ -63,6 +70,7 @@ defmodule FeatherAdapters.Adapter do
   @optional_callbacks ehlo: 3,
                       helo: 3,
                       auth: 3,
+                      auth_result: 4,
                       mail: 3,
                       rcpt: 3,
                       data: 3,

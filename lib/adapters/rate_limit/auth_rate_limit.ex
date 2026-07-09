@@ -8,23 +8,22 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
   ## How It Works
 
-  - Each AUTH attempt increments a per-IP counter (via the `auth/3` and
-    `auth_token/3` callbacks). The increment happens *before* the auth adapter
-    runs (a failed auth halts the pipeline, so there is no post-auth hook to
-    count from), which also means a blocked IP is rejected at EHLO before any
-    credential is checked.
-  - Only *failed* attempts accumulate toward the block: when an authentication
-    succeeds, the per-IP counter is cleared on the next `MAIL FROM` (the first
-    command a legitimate client sends after AUTH), so a user's own successful
-    logins never push them toward a block. An IP that only ever fails keeps
-    accumulating until it trips the limit.
-  - Trade-off: an attacker who lands a valid account mid credential-stuffing
-    run resets their counter on that success. This is the intended behaviour
-    here — blocks target sustained *failures*, not raw attempt volume.
-  - When the counter exceeds `max_attempts`, the IP is blocked for
-    `block_duration` seconds (i.e. `max_attempts` attempts succeed; the
-    next one triggers the block — matching the semantics of the sibling
-    `ConnectionRateLimit` and `MessageRateLimit` adapters)
+  - Only **failed** authentications count toward the limit. The session reports
+    each AUTH outcome via the `auth_result/4` callback: a failed login
+    increments a per-IP counter, a successful login leaves it untouched. A
+    success does *not* reset the counter either — accumulated failures still
+    stand — so an attacker who occasionally lands a valid account in a
+    credential-stuffing run keeps accruing failures across the window and is
+    still blocked; the count merely stops growing for that one success.
+  - The `auth/3` / `auth_token/3` callbacks run *before* the auth adapter and
+    only *check* for an existing block (rejecting a blocked IP before its
+    credentials are checked); they no longer count attempts. Counting is
+    deferred to `auth_result/4` because the outcome isn't known at `auth/3`
+    time — `step(:auth, ...)` halts on the first rejecting adapter, so an
+    upstream adapter can't observe a downstream auth failure inline.
+  - When the failure counter exceeds `max_attempts`, the IP is blocked for
+    `block_duration` seconds (i.e. `max_attempts` failures are tolerated; the
+    next failure triggers the block)
   - Blocked IPs receive a `421` rejection before credentials reach the auth adapter
   - Counters and blocks automatically expire via TTL
 
@@ -91,13 +90,10 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
   ignoring any custom error codes. By checking at EHLO time, blocked IPs are
   rejected before they can attempt AUTH.
 
-  When the limit is reached on the current AUTH attempt:
-
-      454 4.7.0 Too many authentication attempts from your IP. Try again later.
-
-  Note: due to gen_smtp limitations, this 454 response is replaced by gen_smtp
-  with `535 Authentication failed.` The block is still effective — subsequent
-  connections will be rejected at EHLO with the proper 421 code.
+  The failing login that trips the limit still returns the auth adapter's own
+  `535 Authentication failed.` The block takes effect from the next attempt on:
+  subsequent AUTH commands are rejected before reaching the auth adapter, and
+  the next connection is rejected at EHLO with the proper 421 code.
 
   ## Storage Keys
 
@@ -172,29 +168,30 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
   @impl true
   def auth_token(_credentials, meta, state), do: do_check(meta, state)
 
-  # Refund the IP's attempt counter once authentication has succeeded. MAIL FROM
-  # is the first command a legitimate client issues after a successful AUTH, and
-  # `meta.authenticated` is set by every auth adapter on success — so clearing
-  # here means only failed attempts (which halt before MAIL) stick to the IP.
-  @impl true
-  def mail(_from, meta, state) do
-    if Map.get(meta, :authenticated) do
-      with false <- is_exempt?(meta, state),
-           ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
-        Feather.Storage.delete("authlimit:attempts:ip:#{ip_string}")
-      end
-    end
-
-    {:ok, meta, state}
-  end
-
+  # Block-check only: reject when the IP is already blocked. Counting happens in
+  # auth_result/4 once the outcome is known — see the moduledoc.
   defp do_check(meta, state) do
     with false <- is_exempt?(meta, state),
          ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
-      check_and_track(ip_string, meta, state)
+      check_block(ip_string, meta, state)
     else
       true -> {:ok, meta, state}
       :unknown_ip -> {:ok, meta, state}
+    end
+  end
+
+  # Called by the session after each AUTH resolves. Only failures count toward
+  # the limit; a success is ignored (it neither increments nor resets the
+  # counter, so accumulated failures still trip the block).
+  @impl true
+  def auth_result(:ok, _credentials, _meta, _state), do: :ok
+
+  def auth_result(:error, _credentials, meta, state) do
+    with false <- is_exempt?(meta, state),
+         ip_string when is_binary(ip_string) <- format_ip(Map.get(meta, :ip)) do
+      record_failure(ip_string, state)
+    else
+      _ -> :ok
     end
   end
 
@@ -204,18 +201,14 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
     "421 4.7.0 Too many authentication attempts. Try again in #{minutes} minutes."
   end
 
-  def format_reason({:auth_attempts_exceeded, _max}) do
-    "454 4.7.0 Too many authentication attempts from your IP. Try again later."
-  end
-
   # Private functions
 
-  defp check_and_track(ip_string, meta, state) do
+  defp check_block(ip_string, meta, state) do
     block_key = "authlimit:blocked:#{ip_string}"
 
     case Feather.Storage.get(block_key) do
       nil ->
-        track_attempt(ip_string, meta, state)
+        {:ok, meta, state}
 
       blocked_until ->
         remaining = max(blocked_until - System.system_time(:second), 0)
@@ -229,7 +222,7 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
     end
   end
 
-  defp track_attempt(ip_string, meta, state) do
+  defp record_failure(ip_string, state) do
     counter_key = "authlimit:attempts:ip:#{ip_string}"
 
     case Feather.Storage.increment(counter_key, 1, ttl: state.time_window) do
@@ -241,18 +234,16 @@ defmodule FeatherAdapters.RateLimit.AuthRateLimit do
 
           Logger.warning(
             "AuthRateLimit: Blocking IP #{ip_string} for #{state.block_duration}s " <>
-              "(#{count} auth attempts in #{state.time_window}s)"
+              "(#{count} failed auth attempts in #{state.time_window}s)"
           )
-
-          {:halt, {:auth_attempts_exceeded, state.max_attempts}, state}
-        else
-          {:ok, meta, state}
         end
+
+        :ok
 
       {:error, reason} ->
         Logger.error("AuthRateLimit: Failed to increment counter: #{inspect(reason)}")
-        # Fail open
-        {:ok, meta, state}
+        # Fail open: don't block on storage errors.
+        :ok
     end
   end
 
