@@ -99,13 +99,33 @@ defmodule FeatherAdapters.Transformers.AuthenticationResults do
   end
 
   defp quote_if_needed(v) do
-    str = to_string(v)
+    str = v |> to_string() |> unfold()
 
     if Regex.match?(~r/\A[A-Za-z0-9._@\/+:-]+\z/, str) do
       str
     else
-      "\"" <> String.replace(str, "\"", "\\\"") <> "\""
+      escaped = String.replace(str, ~r/(["\\])/, "\\\\\\1")
+      "\"" <> escaped <> "\""
     end
+  end
+
+  # Header values are assembled from remote-controlled input (envelope sender,
+  # HELO, and the verifier's explanation — which can carry an SPF `exp=` string
+  # from the sender's DNS). A CR or LF reaching the header block would end the
+  # field and let that input inject headers of its own, so collapse them here.
+  defp unfold(str) do
+    str
+    |> String.replace(~r/[\r\n]+/, " ")
+    |> String.trim()
+  end
+
+  # RFC 5322 ctext excludes "(", ")" and "\"; they must be escaped as
+  # quoted-pairs or the comment terminates early and the remainder is parsed
+  # as header content.
+  defp escape_comment(str) do
+    str
+    |> unfold()
+    |> String.replace(~r/([()\\])/, "\\\\\\1")
   end
 
   defp build_received_spf(_authserv_id, _entries, nil), do: nil
@@ -129,14 +149,15 @@ defmodule FeatherAdapters.Transformers.AuthenticationResults do
 
     fields =
       [
-        spf.client_ip && spf.client_ip != "" && "client-ip=#{spf.client_ip}",
-        spf.envelope_from && spf.envelope_from != "" && "envelope-from=#{spf.envelope_from}",
-        spf.helo && spf.helo != "" && "helo=#{spf.helo}"
+        spf.client_ip && spf.client_ip != "" && "client-ip=#{unfold(spf.client_ip)}",
+        spf.envelope_from && spf.envelope_from != "" &&
+          "envelope-from=#{unfold(spf.envelope_from)}",
+        spf.helo && spf.helo != "" && "helo=#{unfold(spf.helo)}"
       ]
       |> Enum.filter(&is_binary/1)
       |> Enum.join("; ")
 
-    "Received-SPF: #{spf.result} (#{authserv_id}: #{comment_text})\r\n\t#{fields}\r\n"
+    "Received-SPF: #{spf.result} (#{authserv_id}: #{escape_comment(comment_text)})\r\n\t#{fields}\r\n"
   end
 
   defp default_comment(_authserv_id, %{result: :pass, envelope_from: ef, client_ip: ip}),
