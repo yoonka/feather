@@ -106,4 +106,91 @@ defmodule FeatherAdapters.Transformers.AuthenticationResultsTest do
 
     assert String.contains?(out, ~s|header.i="foo bar"|)
   end
+
+  describe "header injection" do
+    # The comment carries the verifier's explanation, which can include an
+    # `exp=` string from the sender's own DNS; properties and fields carry the
+    # envelope sender and HELO. All are remote-controlled.
+    test "CRLF in the SPF comment cannot inject a header" do
+      meta = %{
+        auth_results: [%{method: :spf, result: :fail, properties: []}],
+        received_spf: %{
+          result: :fail,
+          comment: "evil\r\nX-Injected: yes",
+          client_ip: "1.2.3.4",
+          envelope_from: "e@f",
+          helo: "h"
+        }
+      }
+
+      {out, ^meta} =
+        AuthenticationResults.transform_data(@msg, meta, %{}, authserv_id: "mx.example.com")
+
+      refute out =~ ~r/^X-Injected:/m
+      assert String.contains?(out, "evil X-Injected: yes")
+    end
+
+    test "a closing paren in the SPF comment is escaped so the comment cannot end early" do
+      meta = %{
+        auth_results: [%{method: :spf, result: :fail, properties: []}],
+        received_spf: %{
+          result: :fail,
+          comment: "evil) still-comment",
+          client_ip: "1.2.3.4",
+          envelope_from: "e@f",
+          helo: "h"
+        }
+      }
+
+      {out, ^meta} =
+        AuthenticationResults.transform_data(@msg, meta, %{}, authserv_id: "mx.example.com")
+
+      assert String.contains?(out, "(mx.example.com: evil\\) still-comment)")
+    end
+
+    test "CRLF in a property value cannot inject a header" do
+      meta = %{
+        auth_results: [
+          %{method: :spf, result: :pass, properties: [{"smtp.mailfrom", "x\r\nX-Injected: yes"}]}
+        ]
+      }
+
+      {out, ^meta} =
+        AuthenticationResults.transform_data(@msg, meta, %{}, authserv_id: "mx.example.com")
+
+      refute out =~ ~r/^X-Injected:/m
+      assert String.contains?(out, ~s|smtp.mailfrom="x X-Injected: yes"|)
+    end
+
+    test "CRLF in the HELO field cannot inject a header" do
+      meta = %{
+        auth_results: [%{method: :spf, result: :pass, properties: []}],
+        received_spf: %{
+          result: :pass,
+          comment: "ok",
+          client_ip: "1.2.3.4",
+          envelope_from: "e@f",
+          helo: "h\r\nX-Injected: yes"
+        }
+      }
+
+      {out, ^meta} =
+        AuthenticationResults.transform_data(@msg, meta, %{}, authserv_id: "mx.example.com")
+
+      refute out =~ ~r/^X-Injected:/m
+    end
+
+    test "a backslash in a property value is escaped rather than left dangling" do
+      meta = %{
+        auth_results: [
+          %{method: :dkim, result: :pass, properties: [{"header.i", ~S|a\"b c|}]}
+        ]
+      }
+
+      {out, ^meta} =
+        AuthenticationResults.transform_data(@msg, meta, %{}, authserv_id: "mx.example.com")
+
+      assert String.contains?(out, ~S|header.i="a\\\"b c"|)
+    end
+  end
 end

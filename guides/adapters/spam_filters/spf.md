@@ -16,7 +16,7 @@ See [`FeatherAdapters.SpamFilters.SPF`](`FeatherAdapters.SpamFilters.SPF`).
 | Option | Default | Description |
 |---|---|---|
 | `:spfquery_path` | `"spfquery"` | Path to the binary (resolved via `$PATH`). |
-| `:timeout` | `5_000` | Child-process timeout (ms). |
+| `:timeout` | `5_000` | Wall-clock bound (ms) on the child process. `spfquery` has no timeout flag of its own, so Feather enforces this by killing the child; expiry yields `:defer`. |
 | `:treat_as_spam` | `[:fail]` | Result atoms that produce a spam verdict. |
 | `:scores` | see below | `result → score` mapping for the verdict score. |
 | `:on_spam` | `:reject` | See `FeatherAdapters.SpamFilters.Action`. |
@@ -48,9 +48,22 @@ downstream tagger) can read them.
 
 ## Operational notes
 
-- libspf2 is the reference C implementation; `spfquery` is available
-  via OS packages (`pkg install libspf2` on FreeBSD, `apt install
-  libspf2-2 libspf2-dev` then build `spfquery`, or `brew install
-  spf-tools-perl` for the Perl variant).
-- The Perl `spf-tools` package ships a compatible `spfquery` — verify
-  it returns the same first-line result keyword (`pass`, `fail`, etc).
+- libspf2 is the reference C implementation and the one this adapter
+  targets: `pkg install libspf2` on FreeBSD, or `apt install libspf2-2
+  libspf2-dev` then build `spfquery`.
+- Both the invocation and the output parsing are libspf2-specific (see
+  `FeatherAdapters.SPFQuery`). Other binaries that happen to be named
+  `spfquery` — notably the Perl `spf-tools` variant — do not share
+  libspf2's output shape, and are not interchangeable.
+- Any output that is not a recognizable verdict yields `:temperror`
+  (hence `:defer`), never `:none`. A checker that failed to run must
+  not be reported as an authoritative "no SPF record": downstream
+  filters and DMARC would treat that as a real evaluation.
+- Verify the binary after any packaging change:
+
+  ```console
+  $ spfquery -ip 209.85.220.41 -sender test@gmail.com -helo mail.google.com
+  pass
+
+  spfquery: domain of gmail.com designates 209.85.220.41 as permitted sender
+  ```
