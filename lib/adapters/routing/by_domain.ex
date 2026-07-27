@@ -61,11 +61,17 @@ defmodule FeatherAdapters.Routing.ByDomain do
         Map.get(routes, domain, Map.get(routes, :default))
       end)
 
-    # For each adapter, call its deliver/3 method
+    # For each adapter, call its deliver/3 method. The route's meta carries the
+    # session meta forward — only `:to` is narrowed to that route's recipients.
+    # Route-level transformers read session state the earlier phases recorded
+    # (`:auth_results` and `:received_spf` from the `AuthResults.*` adapters,
+    # `:ip`, `:helo`, ...); building a fresh `%{from:, to:}` here would drop it
+    # and, for example, leave `AuthenticationResults` with nothing to stamp.
     results =
       Enum.map(grouped, fn {{adapter_mod, opts}, rcpts} ->
-        state = adapter_mod.init_session(opts)
-        adapter_mod.deliver(message, %{from: from, to: rcpts}, state)
+        route_meta = Map.merge(meta, %{from: from, to: rcpts})
+        route_state = adapter_mod.init_session(opts)
+        adapter_mod.deliver(message, route_meta, route_state)
       end)
 
     case Enum.find(results, fn r -> match?({:halt, _, _}, r) end) do
