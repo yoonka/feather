@@ -39,8 +39,14 @@ mta_pipeline = [
           # 1. Border defense (RFC 8601 §5): drop any trust headers a remote
           #    sender forged — INCLUDING an Authentication-Results bearing our
           #    own authserv_id — BEFORE we stamp our own. Order this FIRST.
+          #
+          #    On an inbound hop the set stays narrow: `received` is the trace
+          #    chain and `dkim-signature` is the sender's own signature, so
+          #    stripping either destroys evidence the mailbox still needs.
+          #    Strip those on the *submission* hop instead, where the client is
+          #    the untrusted party.
           {FeatherAdapters.Transformers.HeaderSanitizer,
-           headers: ~w(authentication-results received dkim-signature
+           headers: ~w(authentication-results
                        arc-seal arc-message-signature arc-authentication-results
                        x-spam-status x-spam-flag x-spam-score)},
 
