@@ -214,14 +214,62 @@ defmodule Feather.Session do
   @impl true
   def handle_VRFY(_address, state), do: {:error, ~c"502 5.5.1 VRFY command disabled", state}
 
+  # Verbs gen_smtp does not dispatch itself but that are part of SMTP (or a
+  # registered extension). RFC 5321 §4.2.4 wants these answered with 502
+  # (command recognized, not implemented) rather than 500 (unrecognized).
+  @unimplemented_commands ~w(EXPN HELP TURN ETRN ATRN BDAT SEND SOML SAML)
+
+  # Unrecognized commands still cost a round trip and, more importantly, reset
+  # the session inactivity timer. Cap how many a single session may issue so a
+  # client cannot hold a connection open indefinitely on junk traffic alone.
+  @default_max_unknown_commands 10
+
+  # Mirrors gen_smtp_server_session's ?TIMEOUT (3 minutes).
+  @session_timeout 180_000
+
   @impl true
-  def handle_other("EXPN", _args, state) do
-    {~c"502 5.5.1 EXPN command disabled", state}
+  def handle_other(cmd, _args, state) do
+    count = Map.get(state, :unknown_commands, 0) + 1
+    state = Map.put(state, :unknown_commands, count)
+
+    if count >= max_unknown_commands(state) do
+      Logger.info(
+        "Closing session from #{inspect(state.meta[:ip])}: #{count} unrecognized commands"
+      )
+
+      # handle_other/3 has no way to stop the session, and the reply below is
+      # only written to the socket after this call returns. Defer the shutdown
+      # to handle_info/2 so the client still receives the 421.
+      send(self(), :close_session)
+      {~c"421 4.7.0 Too many unrecognized commands, closing connection", state}
+    else
+      {unknown_command_reply(cmd), state}
+    end
   end
 
-  def handle_other(_cmd, _args, state) do
-    {:noreply, state}
+  defp unknown_command_reply(cmd) when is_binary(cmd) do
+    if String.upcase(cmd) in @unimplemented_commands do
+      ~c"502 5.5.1 Command not implemented"
+    else
+      ~c"500 5.5.2 Command unrecognized"
+    end
   end
+
+  defp unknown_command_reply(_cmd), do: ~c"500 5.5.2 Command unrecognized"
+
+  defp max_unknown_commands(state) do
+    case state.opts && state.opts[:max_unknown_commands] do
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_max_unknown_commands
+    end
+  end
+
+  @impl true
+  def handle_info(:close_session, state), do: {:stop, :normal, state}
+
+  # gen_smtp only re-arms its inactivity timeout with the value this callback
+  # returns, so every other message must carry it forward.
+  def handle_info(_info, state), do: {:noreply, state, @session_timeout}
 
   @impl true
   def terminate(reason, %{pipeline: pipeline, meta: meta}) do
