@@ -113,12 +113,29 @@ do_install() {
   # Stop any running instance before overwriting binaries — otherwise cp will
   # fail with "Text file busy" on epmd / beam.smp from a previous install.
   if [ -x "${INSTALL_DIR}/bin/feather" ]; then
-    info "Stopping running ${name:-feather} (if any)"
+    info "Stopping running feather (if any)"
     su -m "$FEATHER_USER" -c "${INSTALL_DIR}/bin/feather stop" >/dev/null 2>&1 || true
-    # Match by executable path so we don't touch anything outside this install.
-    pkill -f "^${INSTALL_DIR}/erts-" >/dev/null 2>&1 || true
-    # Give the kernel a moment to release the executables
-    sleep 2
+    # `feather stop` shuts down the node but leaves epmd running -- it is a
+    # daemon that deliberately outlives every node it registered -- so it keeps
+    # erts-*/bin/epmd open and the copy below fails with "Text file busy".
+    # Match by install path, unanchored: inside a jail the kernel reports these
+    # argv values with a prefix ("/_/usr/local/feather/erts-.../bin/epmd"), so
+    # an anchored pattern matches nothing and leaves epmd alive.
+    pkill -f "${INSTALL_DIR}/erts-" >/dev/null 2>&1 || true
+
+    # Wait for the kernel to release the executables rather than assuming a
+    # fixed delay is enough, then escalate to SIGKILL for anything left.
+    i=0
+    while pgrep -f "${INSTALL_DIR}/erts-" >/dev/null 2>&1; do
+      i=$((i + 1))
+      if [ "$i" -gt 10 ]; then
+        warn "Processes still holding $INSTALL_DIR, killing"
+        pkill -9 -f "${INSTALL_DIR}/erts-" >/dev/null 2>&1 || true
+        sleep 1
+        break
+      fi
+      sleep 1
+    done
   fi
 
   info "Creating directories"
@@ -127,6 +144,11 @@ do_install() {
   install -d -o "$FEATHER_USER" -g "$FEATHER_GROUP" -m 0750 "$FEATHER_LOG"
 
   info "Copying release to $INSTALL_DIR"
+  # Unlink the previous release's payload before copying. Overwriting a binary
+  # that is still mapped by a running process fails, but unlinking it always
+  # succeeds and the copy then creates a fresh file -- so a straggling process
+  # can no longer break the install. Config and logs live outside INSTALL_DIR.
+  rm -rf "${INSTALL_DIR:?}/erts-"* "${INSTALL_DIR:?}/lib" "${INSTALL_DIR:?}/releases"
   cp -r "${SCRIPT_DIR}/." "$INSTALL_DIR/"
   chown -R "$FEATHER_USER":"$FEATHER_GROUP" "$INSTALL_DIR"
 
