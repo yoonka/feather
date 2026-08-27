@@ -10,7 +10,34 @@ defmodule Feather.SessionTest do
       {:error, {:already_started, _pid}} -> :ok
     end
 
+    # init/4 reads the pipeline from this manager.
+    case Feather.PipelineManager.start_link([]) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
     :ok
+  end
+
+  # init/4 runs in the session process, thus the deadline timer sends to the
+  # test process here.
+  defp init_session(session_options) do
+    previous = Application.get_env(:feather, :smtp_server)
+
+    Application.put_env(:feather, :smtp_server,
+      name: "Feather Test",
+      sessionoptions: session_options
+    )
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:feather, :smtp_server, previous)
+      else
+        Application.delete_env(:feather, :smtp_server)
+      end
+    end)
+
+    Session.init("mta.test", 1, {127, 0, 0, 1}, [])
   end
 
   # Minimal session state with an empty pipeline. With no adapters, the
@@ -117,6 +144,37 @@ defmodule Feather.SessionTest do
       state = new_state()
       assert {:noreply, ^state, timeout} = Session.handle_info(:something_else, state)
       assert timeout == 180_000
+    end
+  end
+
+  describe "session duration cap" do
+    test "init arms the deadline from the session options" do
+      assert {:ok, _banner, _state} = init_session(max_session_duration: 1)
+
+      assert_receive :session_deadline, 2_000
+    end
+
+    test ":infinity disables the deadline" do
+      assert {:ok, _banner, _state} = init_session(max_session_duration: :infinity)
+
+      refute_receive :session_deadline, 200
+    end
+
+    test "the deadline runs the timeout path of gen_smtp" do
+      state = new_state()
+
+      # A zero timeout makes gen_smtp send its own 421 reply and close the
+      # connection.
+      assert {:noreply, ^state, 0} = Session.handle_info(:session_deadline, state)
+    end
+
+    test "the deadline also arms an unconditional shutdown" do
+      state = new_state()
+
+      Session.handle_info(:session_deadline, state)
+
+      assert_receive :close_session, 3_000
+      assert {:stop, :normal, ^state} = Session.handle_info(:close_session, state)
     end
   end
 end
