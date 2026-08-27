@@ -26,6 +26,8 @@ defmodule Feather.Session do
       mail_from?: false
     }
 
+    schedule_session_deadline(options)
+
     {:ok, banner, state}
   end
 
@@ -264,8 +266,45 @@ defmodule Feather.Session do
     end
   end
 
+  # gen_smtp offers an inactivity timeout only: each byte from the client
+  # re-arms it. Valid but cheap commands, such as NOOP, thus keep a session
+  # open for an unlimited time. An absolute deadline limits the full duration
+  # of a session, independent of the traffic on it.
+  @default_max_session_duration 1_800
+
+  # Time between the deadline and the unconditional shutdown. The graceful path
+  # below needs an idle moment, which a client that floods the session can
+  # withhold.
+  @session_deadline_grace 2_000
+
+  defp schedule_session_deadline(opts) do
+    case max_session_duration(opts) do
+      :infinity -> :ok
+      seconds -> Process.send_after(self(), :session_deadline, seconds * 1000)
+    end
+  end
+
+  defp max_session_duration(opts) do
+    case opts && opts[:max_session_duration] do
+      :infinity -> :infinity
+      n when is_integer(n) and n > 0 -> n
+      _ -> @default_max_session_duration
+    end
+  end
+
   @impl true
   def handle_info(:close_session, state), do: {:stop, :normal, state}
+
+  def handle_info(:session_deadline, state) do
+    Logger.info("Closing session from #{inspect(state.meta[:ip])}: session deadline reached")
+
+    # A zero timeout makes gen_smtp run its own timeout path, which writes
+    # 421 to the socket and closes the connection. The client thus receives a
+    # reply. gen_server cancels the zero timeout if a message from the client
+    # arrives first, so arm an unconditional shutdown as a backstop.
+    Process.send_after(self(), :close_session, @session_deadline_grace)
+    {:noreply, state, 0}
+  end
 
   # gen_smtp only re-arms its inactivity timeout with the value this callback
   # returns, so every other message must carry it forward.
