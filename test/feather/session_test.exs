@@ -93,6 +93,81 @@ defmodule Feather.SessionTest do
     end
   end
 
+  defmodule CaptureData do
+    def data(raw, meta, %{pid: pid} = state) do
+      send(pid, {:data, raw, meta})
+      {:ok, meta, state}
+    end
+  end
+
+  defp capture_state(overrides \\ %{}) do
+    new_state(Map.merge(%{pipeline: [{CaptureData, %{pid: self()}}]}, overrides))
+  end
+
+  defp send_data(state, to \\ ["rcpt@mta.test"], data \\ "Subject: hi\r\n\r\nbody") do
+    {:ok, state} = Session.handle_MAIL("sender@client.test", state)
+    Session.handle_DATA("sender@client.test", to, data, state)
+  end
+
+  describe "Received: trace header (RFC 5321 §4.4)" do
+    test "each accepted message gets a Received: field on top" do
+      {:ok, _exts, state} = Session.handle_EHLO("client.test", [], capture_state())
+      assert {:ok, _reply, _state} = send_data(state)
+
+      assert_received {:data, raw, meta}
+      assert raw =~ ~r/\AReceived: from client\.test \(\[127\.0\.0\.1\]\)\r\n/
+      assert raw =~ "by mta.test (Feather) with ESMTP id "
+      assert raw =~ "for <rcpt@mta.test>;"
+      assert String.ends_with?(raw, "Subject: hi\r\n\r\nbody")
+      assert meta.helo == "client.test"
+      assert String.starts_with?(raw, meta.received_header)
+    end
+
+    test "the protocol keyword reflects HELO, TLS and AUTH (RFC 3848)" do
+      {:ok, state} = Session.handle_HELO("client.test", capture_state())
+      send_data(state)
+      assert_received {:data, raw, _meta}
+      assert raw =~ " with SMTP id "
+
+      {:ok, _exts, state} =
+        Session.handle_EHLO("client.test", [], capture_state(%{tls_active: true}))
+
+      {:ok, state} = Session.handle_AUTH(:plain, "user", "pass", state)
+      send_data(state)
+      assert_received {:data, raw, _meta}
+      assert raw =~ " with ESMTPSA id "
+    end
+
+    test "the for clause is omitted with several recipients" do
+      {:ok, _exts, state} = Session.handle_EHLO("client.test", [], capture_state())
+      send_data(state, ["a@mta.test", "b@mta.test"])
+
+      assert_received {:data, raw, _meta}
+      refute raw =~ "for <"
+    end
+
+    test "header syntax in the HELO argument is not copied into the field" do
+      {:ok, state} = Session.handle_HELO("evil)\r\nX-Injected: 1", capture_state())
+      send_data(state)
+
+      assert_received {:data, raw, _meta}
+      refute raw =~ ~r/^X-Injected:/m
+    end
+
+    test "a message with too many Received: fields is rejected as a loop (RFC 5321 §6.3)" do
+      {:ok, _exts, state} = Session.handle_EHLO("client.test", [], capture_state())
+      trace = String.duplicate("Received: from x by y; date\r\n", 100)
+
+      assert {:error, reply, state} = send_data(state, ["rcpt@mta.test"], trace <> "Subject: hi\r\n\r\nbody")
+      assert reply =~ "554 5.4.6"
+      refute state.mail_from?
+      refute_received {:data, _raw, _meta}
+
+      trace = String.duplicate("Received: from x by y; date\r\n", 99)
+      assert {:ok, _reply, _state} = send_data(state, ["rcpt@mta.test"], trace <> "Subject: hi\r\n\r\nbody")
+    end
+  end
+
   describe "unknown commands (RFC 5321 §4.2)" do
     test "an unrecognized command is answered with 500" do
       assert {reply, state} = Session.handle_other("FOOBAR", "", new_state())

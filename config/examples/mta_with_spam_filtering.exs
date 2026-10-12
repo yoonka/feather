@@ -84,9 +84,11 @@ pipeline = [
    transformers: [
      # Drop trust headers a remote sender may have forged (forged X-Spam-*
      # would otherwise let Sieve mis-sort) before we materialize our own.
+     # `received` and `dkim-signature` stay: the trace chain and the
+     # sender's signature are evidence the mailbox still needs.
      {FeatherAdapters.Transformers.HeaderSanitizer,
-      headers: ~w(authentication-results received dkim-signature
-                  x-spam-status x-spam-flag x-spam-score)},
+      headers: ~w(authentication-results x-spam-status x-spam-flag
+                  x-spam-score)},
      # Materializes meta[:spam_headers] (X-Spam-Flag / Score / Tags) into
      # the outgoing message so Dovecot Sieve can sort into Junk.
      FeatherAdapters.Transformers.SpamHeaders,

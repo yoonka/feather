@@ -76,6 +76,15 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizerTest do
     assert String.contains?(out, "Subject: hi")
   end
 
+  test "the Received: field this hop stamped survives a received strip" do
+    own = "Received: from client.test ([127.0.0.1])\r\n\tby mta.test (Feather) with ESMTPSA id 1; date\r\n"
+    raw = "Return-Path: <a@b>\r\n" <> own <> "Received: from forged\r\nSubject: hi\r\n\r\nBody.\r\n"
+
+    {out, _} = HeaderSanitizer.transform_data(raw, %{received_header: own}, %{}, [])
+
+    assert out == own <> "Subject: hi\r\n\r\nBody.\r\n"
+  end
+
   test "non-binary raw is passed through unchanged" do
     assert {nil, %{x: 1}} = HeaderSanitizer.transform_data(nil, %{x: 1}, %{}, [])
   end
