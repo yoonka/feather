@@ -1,7 +1,7 @@
-defmodule Feather.TraceHeaderTest do
+defmodule Feather.Utils.TraceHeaderTest do
   use ExUnit.Case, async: true
 
-  alias Feather.TraceHeader
+  alias Feather.Utils.TraceHeader
 
   test "renders an RFC 5321 §4.4 Received: field" do
     header =

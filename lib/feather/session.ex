@@ -238,7 +238,7 @@ defmodule Feather.Session do
         _ -> @default_max_received_headers
       end
 
-    if Feather.TraceHeader.count(data) >= max do
+    if Feather.Utils.TraceHeader.count(data) >= max do
       {:error, "554 5.4.6 Routing loop detected: too many Received headers"}
     else
       :ok
@@ -246,17 +246,17 @@ defmodule Feather.Session do
   end
 
   defp received_header(to, state) do
-    Feather.TraceHeader.build(%{
+    Feather.Utils.TraceHeader.build(%{
       helo: state.meta[:helo],
       ip: state.meta[:ip],
       hostname: state.hostname,
       protocol:
-        Feather.TraceHeader.protocol(
+        Feather.Utils.TraceHeader.protocol(
           Map.get(state, :esmtp?, false),
           Map.get(state, :tls_active, false),
           Map.get(state, :authenticated?, false)
         ),
-      id: Feather.TraceHeader.new_id(),
+      id: Feather.Utils.TraceHeader.new_id(),
       to: to
     })
   end

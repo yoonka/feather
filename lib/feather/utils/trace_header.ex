@@ -1,4 +1,4 @@
-defmodule Feather.TraceHeader do
+defmodule Feather.Utils.TraceHeader do
   @moduledoc """
   Builds the `Received:` trace header that each SMTP hop prepends to a
   message (RFC 5321 §4.4) and counts the existing ones for the hop-count
