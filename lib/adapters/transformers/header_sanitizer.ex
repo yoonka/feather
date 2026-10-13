@@ -17,11 +17,12 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
 
     * **Submission (MSA)** — strip the full default set so authenticated
       clients cannot forge any trust header.
-    * **Border MTA** — strip `authentication-results` (plus the rest)
-      *before* `FeatherAdapters.Transformers.AuthenticationResults` runs,
-      so a forged inbound verdict bearing our `authserv_id` is removed
-      and then replaced with our own (RFC 8601 §5). Order the sanitizer
-      first in the `:transformers` list.
+    * **Border MTA** — strip `authentication-results` (plus the rest,
+      except `received`) *before*
+      `FeatherAdapters.Transformers.AuthenticationResults` runs, so a
+      forged inbound verdict bearing our `authserv_id` is removed and then
+      replaced with our own (RFC 8601 §5). Order the sanitizer first in
+      the `:transformers` list.
     * **Internal MDA** — omit `authentication-results` from `:headers`
       so the verdict stamped by the trusted upstream MTA survives to the
       mailbox.
@@ -37,8 +38,8 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
        transformers: [
          # strip any client/sender-supplied trust headers first ...
          {FeatherAdapters.Transformers.HeaderSanitizer,
-          headers: ~w(authentication-results received dkim-signature
-                      x-spam-status x-spam-flag x-spam-score)},
+          headers: ~w(authentication-results x-spam-status x-spam-flag
+                      x-spam-score)},
          # ... then stamp our own verdict.
          {FeatherAdapters.Transformers.AuthenticationResults,
           authserv_id: "mta.example.com"}
@@ -49,6 +50,16 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
     * `:headers` — list of header field names (case-insensitive) to
       remove. Defaults to `default_headers/0` (the full MTA-only set).
       Pass a narrower list to preserve specific headers on a trusted hop.
+
+  ## Trace headers
+
+  The `Received:` field this hop stamped (`meta[:received_header]`, set by
+  `Feather.Session`) is never removed, even when `received` is in
+  `:headers`. Stripping `received` on the submission hop therefore drops
+  only the fields the client supplied. On a relay or final-delivery hop,
+  leave `received` out of `:headers`: RFC 5321 §4.4 forbids deleting the
+  trace fields earlier hops added, and the loop check (RFC 5321 §6.3)
+  depends on them.
 
   > #### Security {: .warning}
   >
@@ -90,7 +101,7 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
     if MapSet.size(set) == 0 do
       {raw, meta}
     else
-      {strip(raw, set), meta}
+      {strip(raw, set, meta[:received_header]), meta}
     end
   end
 
@@ -98,17 +109,36 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
 
   # Drop the configured header fields (and their folded continuation lines)
   # from the header block, leaving the body untouched.
-  defp strip(raw, set) do
+  defp strip(raw, set, own_trace) do
     {headers, eol, sep, body} = split_message(raw)
 
     cleaned =
       headers
       |> String.split(~r/\r?\n/, trim: false)
-      |> drop_forbidden(set, [])
+      |> fields([])
+      |> Enum.reject(&(forbidden?(&1, set) and not own_trace?(&1, own_trace, eol)))
+      |> List.flatten()
       |> Enum.join(eol)
 
     cleaned <> sep <> body
   end
+
+  # Groups header lines into fields: a field line plus its folded
+  # continuation lines (leading WSP).
+  defp fields([], acc), do: Enum.reverse(acc)
+
+  defp fields([line | rest], [field | acc]) when binary_part(line, 0, 1) in [" ", "\t"] do
+    fields(rest, [field ++ [line] | acc])
+  end
+
+  defp fields([line | rest], acc), do: fields(rest, [[line] | acc])
+
+  # The Received: field this hop stamped is never stripped.
+  defp own_trace?(field, own, eol) when is_binary(own) do
+    Enum.join(field, eol) == own |> String.replace("\r\n", eol) |> String.trim_trailing(eol)
+  end
+
+  defp own_trace?(_field, _own, _eol), do: false
 
   # Returns {headers_block, line_ending, blank_line_separator, body}.
   # gen_smtp hands us CRLF, but stored/forwarded messages can be LF-only.
@@ -127,17 +157,7 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
     end
   end
 
-  defp drop_forbidden([], _set, acc), do: Enum.reverse(acc)
-
-  defp drop_forbidden([line | rest], set, acc) do
-    if forbidden?(line, set) do
-      drop_forbidden(drop_continuations(rest), set, acc)
-    else
-      drop_forbidden(rest, set, [line | acc])
-    end
-  end
-
-  defp forbidden?(line, set) do
+  defp forbidden?([line | _continuations], set) do
     case String.split(line, ":", parts: 2) do
       [name, _value] ->
         MapSet.member?(set, name |> String.trim() |> String.downcase())
@@ -146,15 +166,4 @@ defmodule FeatherAdapters.Transformers.HeaderSanitizer do
         false
     end
   end
-
-  # Skip folded continuation lines (leading WSP) belonging to a dropped header.
-  defp drop_continuations([line | rest] = lines) do
-    if String.starts_with?(line, " ") or String.starts_with?(line, "\t") do
-      drop_continuations(rest)
-    else
-      lines
-    end
-  end
-
-  defp drop_continuations([]), do: []
 end

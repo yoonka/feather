@@ -23,7 +23,10 @@ defmodule Feather.Session do
       # Tracks whether a MAIL FROM has been accepted in the current
       # transaction. Used to enforce RFC 5321 §4.3.2 command ordering for
       # RCPT — see handle_RCPT/2.
-      mail_from?: false
+      mail_from?: false,
+      # Recorded for the Received: trace header (RFC 5321 §4.4, RFC 3848).
+      esmtp?: false,
+      authenticated?: false
     }
 
     schedule_session_deadline(options)
@@ -36,7 +39,7 @@ defmodule Feather.Session do
   end
 
   @impl true
-  def handle_EHLO(_domain, extensions, state) do
+  def handle_EHLO(domain, extensions, state) do
     opts = state.opts || %{}
     tls_mode = opts[:tls]
     tls_active? = Map.get(state, :tls_active, false)
@@ -76,7 +79,12 @@ defmodule Feather.Session do
       end
 
     # Allow adapters to modify extensions via ehlo/3 callback
-    state_with_exts = %{state | meta: Map.put(state.meta, :extensions, smtp_extensions)}
+    meta =
+      state.meta
+      |> Map.put(:extensions, smtp_extensions)
+      |> Map.put(:helo, domain)
+
+    state_with_exts = state |> Map.put(:meta, meta) |> Map.put(:esmtp?, true)
 
     case step(:ehlo, smtp_extensions, state_with_exts) do
       {:ok, %{meta: meta} = updated_state} ->
@@ -94,7 +102,10 @@ defmodule Feather.Session do
   end
 
   @impl true
-  def handle_HELO(domain, state), do: step(:helo, domain, state)
+  def handle_HELO(domain, state) do
+    state = %{state | meta: Map.put(state.meta, :helo, domain)} |> Map.put(:esmtp?, false)
+    step(:helo, domain, state)
+  end
 
   def handle_AUTH(type, username, password, {:ok, state}) do
     handle_AUTH(type, username, password, state)
@@ -103,9 +114,9 @@ defmodule Feather.Session do
   @impl true
   def handle_AUTH(_type, username, password, state) do
     case step(:auth, {username, password}, state) do
-      {:ok, new_state} = result ->
+      {:ok, new_state} ->
         notify_auth_result(:ok, {username, password}, new_state)
-        result
+        {:ok, Map.put(new_state, :authenticated?, true)}
 
       {:error, _reply, new_state} = result ->
         notify_auth_result(:error, {username, password}, new_state)
@@ -155,9 +166,16 @@ defmodule Feather.Session do
 
   @impl true
   def handle_DATA(from, to, data, %{meta: meta} = state) do
-    case sanitize_headers(data) do
+    case validate_data(data, state) do
       {:ok, sanitized} ->
-        meta = Map.merge(meta, %{from: from, to: to})
+        # RFC 5321 §4.4: every hop MUST prepend its own Received: field. It
+        # is stamped before the filters run so they see this hop too, and its
+        # exact text is kept in meta so HeaderSanitizer can tell it apart from
+        # Received: fields a client supplied.
+        received = received_header(to, state)
+        sanitized = received <> sanitized
+
+        meta = Map.merge(meta, %{from: from, to: to, received_header: received})
         # End of transaction — gen_smtp resets its envelope after DATA, so
         # clear our MAIL FROM marker too (a new transaction must re-issue MAIL).
         delivery_state = %{state | meta: meta, mail_from?: false}
@@ -202,6 +220,45 @@ defmodule Feather.Session do
       {:error, reason} ->
         {:error, reason, %{state | mail_from?: false}}
     end
+  end
+
+  # RFC 5321 §6.3: a message whose Received: count exceeds a large threshold
+  # is assumed to be in a routing loop and is rejected. The RFC asks for a
+  # threshold of at least 100.
+  @default_max_received_headers 100
+
+  defp validate_data(data, state) do
+    with :ok <- check_hop_count(data, state), do: sanitize_headers(data)
+  end
+
+  defp check_hop_count(data, state) do
+    max =
+      case state.opts && state.opts[:max_received_headers] do
+        n when is_integer(n) and n > 0 -> n
+        _ -> @default_max_received_headers
+      end
+
+    if Feather.Utils.TraceHeader.count(data) >= max do
+      {:error, "554 5.4.6 Routing loop detected: too many Received headers"}
+    else
+      :ok
+    end
+  end
+
+  defp received_header(to, state) do
+    Feather.Utils.TraceHeader.build(%{
+      helo: state.meta[:helo],
+      ip: state.meta[:ip],
+      hostname: state.hostname,
+      protocol:
+        Feather.Utils.TraceHeader.protocol(
+          Map.get(state, :esmtp?, false),
+          Map.get(state, :tls_active, false),
+          Map.get(state, :authenticated?, false)
+        ),
+      id: Feather.Utils.TraceHeader.new_id(),
+      to: to
+    })
   end
 
   @impl true
