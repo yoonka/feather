@@ -49,6 +49,26 @@ defmodule Feather.MailQueueTest do
     assert stored == Map.drop(meta, [:from, :to])
   end
 
+  test "a meta whose atoms do not exist yet is read back", %{tmp_dir: dir} do
+    # After a restart, the atoms of a stored meta may not exist until the
+    # modules that use them are loaded. Build %{<new atom> => 1} by hand,
+    # since writing the atom here would create it.
+    name = "feather_queue_test_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+    term = <<131, 116, 1::32, 119, byte_size(name), name::binary, 97, 1>>
+
+    File.mkdir_p!(Path.join(dir, "0"))
+
+    File.write!(
+      Path.join([dir, "0", "abc.eml"]),
+      "X-Feather-Envelope-From: <a@example.com>\r\n" <>
+        "X-Feather-Envelope-To: <b@example.org>\r\n" <>
+        "X-Feather-Envelope-Meta: #{Base.encode64(term)}\r\n" <> @raw
+    )
+
+    assert {:ok, %Entry{meta: meta}, @raw} = MailQueue.get(dir, 0, "abc")
+    assert meta == %{String.to_existing_atom(name) => 1}
+  end
+
   test "a corrupt meta line is reported", %{tmp_dir: dir} do
     File.mkdir_p!(Path.join(dir, "0"))
 

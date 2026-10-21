@@ -209,11 +209,13 @@ defmodule Feather.MailQueue do
     end
   end
 
-  # :safe refuses to create atoms, so a corrupt file cannot exhaust the atom
-  # table; every atom in a meta we wrote already exists.
+  # Not :safe: that refuses atoms which do not exist yet, and after a
+  # restart the atoms of a stored meta (its keys, the values adapters put
+  # there) may not exist until the modules that use them are loaded. The
+  # spool is written only by Feather, with mode 0600, so it is trusted.
   defp decode_meta(encoded) do
     with {:ok, binary} <- Base.decode64(encoded) do
-      case :erlang.binary_to_term(binary, [:safe]) do
+      case :erlang.binary_to_term(binary) do
         meta when is_map(meta) -> {:ok, meta}
         _ -> :error
       end
