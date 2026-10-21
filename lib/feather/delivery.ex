@@ -232,6 +232,11 @@ defmodule Feather.Delivery do
     |> Enum.each(fn {reply, rcpts} ->
       {status, diagnostic} = dsn_info(reply)
 
+      Logger.info(
+        "[DELIVERY] Failed for #{Enum.join(rcpts, ", ")} (status #{status}), " <>
+          "reporting to <#{from}>: #{reply}"
+      )
+
       DSN.notify_failure(from, rcpts, reply,
         hostname: hostname,
         diagnostic_code: diagnostic,
