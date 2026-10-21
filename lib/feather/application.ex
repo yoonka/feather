@@ -16,6 +16,9 @@ alias Feather.PipelineManager
       {PipelineManager, []},
       {Feather.ConfigLoader, []},
       {Task.Supervisor, name: Feather.DeliverySupervisor},
+      # Retries queued deliveries; starts only when server.exs configures a
+      # :mail_queue. After ConfigLoader, which loads that configuration.
+      Feather.Delivery,
       {FeatherMailSupervisor, [],}
     ]
     opts = [strategy: :one_for_one, name: Feather.Supervisor]

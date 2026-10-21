@@ -10,6 +10,16 @@ server =
     port: 587,
     protocol: :tcp,
     domain: domain,
+    # Retry temporarily failed deliveries; see guides/concepts/mail_queue.md.
+    # Leave out to report every delivery failure with a DSN right away.
+    mail_queue: [
+      dir: "/var/spool/feather/queue",
+      window: :timer.minutes(15),
+      retry_interval: :timer.minutes(15),
+      max_retry_interval: :timer.hours(4),
+      max_age: :timer.hours(5 * 24),
+      retry_concurrency: 10
+    ],
     sessionoptions: [
       tls: :always,
       tls_options: [
