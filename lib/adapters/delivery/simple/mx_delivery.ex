@@ -18,7 +18,9 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   - All recipients are grouped by domain.
   - Each domain is resolved via DNS to obtain MX records.
   - The message is then delivered to the highest-priority MX server.
-  - If delivery fails for any domain group, the entire pipeline is halted.
+  - If delivery fails for any domain group, the pipeline is halted with
+    `{:failed_recipients, failures}`, listing only the recipients of the
+    failed groups (see `FeatherAdapters.Adapter`).
 
   ## Options
 
@@ -50,19 +52,15 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
 
   2. Perform MX lookup for each domain.
   3. Deliver once per domain using the top-priority MX host.
-  4. Halt and return a `451 4.4.1` error if any group fails to deliver.
+  4. Halt with the recipients of every group that failed to deliver.
 
   ## Errors
 
-  If delivery fails for any domain group, the reason is wrapped in:
+  Each failed recipient carries the reply for its domain group: a `550`
+  when the remote server rejected the message permanently, a `451`
+  otherwise, for example:
 
-      {:remote_delivery_failed, reason}
-
-  and translated into a temporary SMTP error.
-
-  Example failure string returned to SMTP client:
-
-      "451 4.4.1 Could not deliver to remote: {:no_mx_records}"
+      "451 4.4.1 Could not deliver to remote: :no_mx_records"
 
   ## Notes
 
@@ -92,18 +90,21 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       |> Enum.group_by(&domain_of/1)
       |> Enum.map(&deliver_grouped(&1, from, raw, state))
 
-    failed =
+    # Each domain fails on its own: report the recipients of the failed
+    # domains, each with its reply, so the delivered ones are not retried.
+    failures =
       Enum.flat_map(results, fn
-        {:error, _reason, rcpts} -> rcpts
-        _ -> []
+        {:error, reason, rcpts} ->
+          reply = format_reason({:remote_delivery_failed, reason})
+          Enum.map(rcpts, &{&1, reply})
+
+        _ ->
+          []
       end)
 
-    case failed do
-      [] ->
-        {:ok, meta, state}
-
-      failed_rcpts ->
-        {:halt, {:remote_delivery_failed, {:failed_recipients, failed_rcpts}}, state}
+    case failures do
+      [] -> {:ok, meta, state}
+      failures -> {:halt, {:failed_recipients, failures}, state}
     end
   end
 
@@ -230,10 +231,8 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   end
 
   @impl true
-  def format_reason({:remote_delivery_failed, {:failed_recipients, rcpts}}) do
-    list = Enum.map_join(rcpts, ", ", fn {rcpt, reason} -> "#{rcpt}: #{inspect(reason)}" end)
-    "451 4.4.1 Could not deliver to remote: #{list}"
-  end
+  def format_reason({:failed_recipients, failures}),
+    do: FeatherAdapters.Adapter.format_failures(failures)
 
   def format_reason({:remote_delivery_failed, {:send, {:permanent_failure, host, message}}}) do
     msg = to_string(message) |> String.trim()

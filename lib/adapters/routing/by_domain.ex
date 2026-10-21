@@ -42,6 +42,9 @@ defmodule FeatherAdapters.Routing.ByDomain do
 
   - This module does not perform delivery itself.
   - It expects the specified adapter modules to implement `Feather.Adapter`.
+  - When routes fail, it halts with `{:failed_recipients, failures}` listing
+    the recipients of every failed route with their reply (see
+    `FeatherAdapters.Adapter`).
 
   """
 
@@ -67,16 +70,35 @@ defmodule FeatherAdapters.Routing.ByDomain do
     # (`:auth_results` and `:received_spf` from the `AuthResults.*` adapters,
     # `:ip`, `:helo`, ...); building a fresh `%{from:, to:}` here would drop it
     # and, for example, leave `AuthenticationResults` with nothing to stamp.
-    results =
-      Enum.map(grouped, fn {{adapter_mod, opts}, rcpts} ->
+    #
+    # Every route is attempted, and the recipients of the routes that failed
+    # are reported together, so a retry does not repeat the routes that
+    # delivered.
+    failures =
+      Enum.flat_map(grouped, fn {{adapter_mod, opts}, rcpts} ->
         route_meta = Map.merge(meta, %{from: from, to: rcpts})
         route_state = adapter_mod.init_session(opts)
-        adapter_mod.deliver(message, route_meta, route_state)
+
+        case adapter_mod.deliver(message, route_meta, route_state) do
+          {:ok, _meta, _state} ->
+            []
+
+          {:halt, {:failed_recipients, failures}, _state} ->
+            failures
+
+          {:halt, reason, _state} ->
+            reply = FeatherAdapters.Adapter.reply(adapter_mod, reason)
+            Enum.map(rcpts, &{&1, reply})
+        end
       end)
 
-    case Enum.find(results, fn r -> match?({:halt, _, _}, r) end) do
-      nil -> {:ok, meta, state}
-      {:halt, reason, _} -> {:halt, reason, state}
+    case failures do
+      [] -> {:ok, meta, state}
+      failures -> {:halt, {:failed_recipients, failures}, state}
     end
   end
+
+  @impl true
+  def format_reason({:failed_recipients, failures}),
+    do: FeatherAdapters.Adapter.format_failures(failures)
 end
