@@ -7,6 +7,8 @@
 #   perm.test   550 5.1.1 (permanent)
 #   flaky.test  451 4.7.1 greylisted until <flaky_until_s> after start, then 250
 #   dead.test   451 4.3.0 forever
+#   slow.test   250 after holding the RCPT for 15 seconds
+# Anything else (sender.test, where DSNs go) gets 250.
 # Accepted messages are written to <inbox_dir>/<n>.eml with the envelope.
 
 defmodule MockSMTP do
@@ -69,6 +71,7 @@ defmodule MockSMTP do
         "perm.test" -> "550 5.1.1 <#{to}>: no such user"
         "flaky.test" -> if elapsed() < flaky_until, do: "451 4.7.1 <#{to}>: greylisted, try later", else: :ok
         "dead.test" -> "451 4.3.0 <#{to}>: mailbox temporarily unavailable"
+        "slow.test" -> (log("RCPT #{to} -> holding 15s"); Process.sleep(15_000); :ok)
         _ -> :ok
       end
 

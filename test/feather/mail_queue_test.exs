@@ -82,18 +82,48 @@ defmodule Feather.MailQueueTest do
     assert MailQueue.get(dir, 0, "abc") == {:error, :invalid_envelope}
   end
 
-  test "update_recipients rewrites only the recipients", %{tmp_dir: dir} do
+  test "update rewrites the envelope and keeps the message", %{tmp_dir: dir} do
     {:ok, 0, entry} =
       MailQueue.enqueue(dir, @raw, "a@example.com", ["b@example.org", "c@example.org"],
         now: 0,
         meta: %{helo: "client.test"}
       )
 
-    assert {:ok, %Entry{recipients: ["c@example.org"]}} =
-             MailQueue.update_recipients(dir, 0, entry.id, ["c@example.org"])
+    updated = %{entry | recipients: ["c@example.org"], meta: %{helo: "client.test", n: 1}}
+    assert {:ok, ^updated} = MailQueue.update(dir, 0, updated)
+    assert MailQueue.get(dir, 0, entry.id) == {:ok, updated, @raw}
+  end
 
-    assert {:ok, updated, @raw} = MailQueue.get(dir, 0, entry.id)
-    assert updated == %{entry | recipients: ["c@example.org"]}
+  test "accept writes to incoming/, which is not a bucket", %{tmp_dir: dir} do
+    {:ok, entry} =
+      MailQueue.accept(dir, @raw, "a@example.com", ["b@example.org"], meta: %{helo: "x"})
+
+    assert MailQueue.list(dir, :incoming) == [entry.id]
+    assert MailQueue.get(dir, :incoming, entry.id) == {:ok, entry, @raw}
+    assert MailQueue.buckets(dir) == []
+
+    assert MailQueue.remove(dir, :incoming, entry.id) == :ok
+    assert MailQueue.list(dir, :incoming) == []
+    assert File.dir?(Path.join(dir, "incoming"))
+  end
+
+  test "defer moves a message from incoming/ into a bucket, with a new envelope",
+       %{tmp_dir: dir} do
+    {:ok, 0, _} = MailQueue.enqueue(dir, @raw, "", ["x@example.org"], now: 0)
+
+    {:ok, entry} =
+      MailQueue.accept(dir, @raw, "a@example.com", ["b@example.org", "c@example.org"])
+
+    deferred = %{entry | recipients: ["c@example.org"], meta: %{failed: true}}
+
+    # Within the window of bucket 0, so it joins it.
+    assert MailQueue.defer(dir, entry.id, deferred, now: @minute) == {:ok, 0}
+    assert MailQueue.list(dir, :incoming) == []
+    assert MailQueue.get(dir, 0, entry.id) == {:ok, deferred, @raw}
+
+    # Past the window, a new bucket.
+    {:ok, other} = MailQueue.accept(dir, @raw, "a@example.com", ["d@example.org"])
+    assert MailQueue.defer(dir, other.id, other, now: 20 * @minute) == {:ok, 20 * @minute}
   end
 
   test "remove_bucket deletes the bucket and everything in it", %{tmp_dir: dir} do

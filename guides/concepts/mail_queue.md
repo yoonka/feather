@@ -1,21 +1,23 @@
 # Mail Queue
 
-Once Feather replies `250` to `DATA`, it owns the message (RFC 5321 §4.5.5). If delivery then fails, the message must not be dropped: a temporary failure is retried later, and a permanent one is reported to the sender with a Delivery Status Notification (DSN).
+Once Feather replies `250` to `DATA`, it owns the message: it "MUST NOT lose the message for frivolous reasons, such as because the host later crashes" (RFC 5321 §6.1). A temporary delivery failure is retried later, and a permanent one is reported to the sender with a Delivery Status Notification (DSN).
 
-The mail queue keeps temporarily failed messages on disk and retries them in the background.
+The mail queue keeps every accepted message on disk until it is delivered or given up on, and retries failed deliveries in the background.
 
 ---
 
-## What happens when delivery fails
+## What happens to an accepted message
 
-Delivery runs after the `250`, through the `deliver/3` phase of the pipeline. When an adapter halts, each failed recipient is classified by its SMTP reply:
-
-- **`4xx` — temporary.** The recipient is queued and retried.
-- **`5xx` — permanent.** The sender gets a DSN right away.
+1. **Spooled before the `250`.** Once the DATA filters pass, the message is written to the queue's `incoming/` folder and flushed to disk. Only then does Feather reply `250`. If the write fails, Feather replies `451 4.3.0` and the client keeps the message.
+2. **First attempt.** Delivery runs through the `deliver/3` phase of the pipeline. A delivered message is removed from `incoming/`.
+3. **Failures.** When an adapter halts, each failed recipient is classified by its SMTP reply:
+   - **`4xx` — temporary.** The message moves from `incoming/` into a bucket, keeping only these recipients, and is retried.
+   - **`5xx` — permanent.** The sender gets a DSN right away.
+4. **Crash.** A message still in `incoming/` when Feather starts had its first attempt cut short. It is moved into a bucket and retried immediately.
 
 An adapter that fails for only some recipients, such as `MXDelivery` or `ByDomain`, reports just those, so delivered recipients are never sent the message twice.
 
-Without a `:mail_queue` configuration, every failure is reported with a DSN right away.
+Without a `:mail_queue` configuration, nothing is written to disk and every failure is reported with a DSN right away.
 
 ---
 
@@ -57,6 +59,8 @@ Failed messages are grouped into **buckets**: folders named after the epoch mill
 
 ```
 /var/spool/feather/queue/
+├── incoming/                       ← accepted, first attempt running
+│   └── 65e54d7b873e5bed04d076af3.eml
 ├── 1761037200000/
 │   ├── 65e53cb73691c073d4a4608bd.eml
 │   └── 65e53cb73a1c4baf36edd1e81.eml
@@ -73,11 +77,44 @@ Within a bucket, messages are retried in parallel too: at most `retry_concurrenc
 
 A bucket is retried as it ages: at `retry_interval`, then each gap doubles up to `max_retry_interval`. With the defaults:
 
-> 15m → 30m → 1h → 2h → 4h → 8h → 12h → 16h → …
+> 45m → 1½h → 3h → 6h → 9h → 12h → …
+
+Ages count from when the bucket was opened, so a message that joined at the end of the window waits `retry_interval − window` for its first retry. RFC 5321 §4.5.4.1 asks for at least 30 minutes between attempts, hence the default `retry_interval` of the 15 minute window plus 30 minutes. The schedule then follows the RFC's suggestion of "two connection attempts in the first hour … then backing off to one every two or three hours".
 
 After a retry, delivered recipients are dropped from the message, and a message with none left is deleted. A worker whose bucket is empty, and too old for new failures to join, stops.
 
-Once a bucket is older than `max_age`, its worker gives up on it: each remaining sender gets a DSN (`4.4.7`, delivery time expired), the whole bucket folder is deleted, and the worker stops.
+Once a bucket is older than `max_age`, its worker gives up on it: each remaining sender gets a DSN, the whole bucket folder is deleted, and the worker stops.
+
+---
+
+## DSNs
+
+A DSN (RFC 3464) is sent from the null sender `<>` and lists every failed recipient with:
+
+- `Status`: the enhanced code of the actual failure, e.g. the remote server's `5.1.1`. When a message is given up on, each recipient keeps the status of its last failure; `4.4.7` (delivery time expired) is used only when no attempt recorded one, as RFC 3463 asks.
+- `Diagnostic-Code` and `Remote-MTA`: the remote server's reply and its host, when the failure came from one.
+- `Last-Attempt-Date`, and per message `Arrival-Date`: when the message really arrived, not when the DSN was written.
+
+The original message's headers are attached (`text/rfc822-headers`). `Original-Recipient` is never written: RFC 3464 allows it only when the client passed the original address with the DSN extension's ORCPT parameter, which Feather does not support.
+
+A DSN is delivered straight to the mail exchangers of the sender's domain, with the same DNS rules as `MXDelivery`. It is itself a message Feather must deliver: it is spooled like any other, and queued for retry when the sender's server fails temporarily. A DSN is never sent about a message from `<>`, so a DSN that cannot be delivered is dropped rather than bounced.
+
+---
+
+## Remote delivery (`MXDelivery`)
+
+Resolving a recipient's domain follows RFC 5321 §5.1:
+
+| DNS answer | Result |
+|---|---|
+| MX records | Tried by preference; equal preferences in random order. Never the domain's own address, even if every MX fails. |
+| No MX records | The domain's own address (implicit MX). |
+| Domain does not exist | Permanent: `550 5.1.2`. |
+| Null MX (RFC 7505) | Permanent: `550 5.1.10`. |
+| Neither MX nor address | Permanent: `550 5.4.4`. |
+| Lookup failed (timeout, SERVFAIL) | Temporary: `451 4.4.3`, retried. |
+
+A `5xx` from an MX ends the attempt; a `4xx` moves on to the next MX. A host that cannot be reached (refused, timed out) is remembered for 5 minutes (`unreachable_ttl`), and messages for it are deferred without connecting, rather than each waiting out its own connection timeout (RFC 5321 §4.5.4.1). `SMTPForward` does the same for its relay.
 
 ---
 
@@ -89,8 +126,8 @@ The queue is configured in `server.exs` and applied on start:
 mail_queue: [
   dir: "/var/spool/feather/queue",
   window: :timer.minutes(15),
-  retry_interval: :timer.minutes(15),
-  max_retry_interval: :timer.hours(4),
+  retry_interval: :timer.minutes(45),
+  max_retry_interval: :timer.hours(3),
   max_age: :timer.hours(5 * 24),
   retry_concurrency: 10
 ]
@@ -100,9 +137,10 @@ mail_queue: [
 |---|---|---|
 | `:dir` | required | Queue directory. |
 | `:window` | 15 minutes | How long a bucket accepts new failures. |
-| `:retry_interval` | 15 minutes | Age of a bucket at its first retry. |
-| `:max_retry_interval` | 4 hours | Longest gap between retries. |
+| `:retry_interval` | 45 minutes | Age of a bucket at its first retry. |
+| `:max_retry_interval` | 3 hours | Longest gap between retries. |
 | `:max_age` | 5 days | Age at which a bucket is given up on and deleted. |
 | `:retry_concurrency` | 10 | Messages of one bucket retried at once. |
+| `:bounce_options` | `[]` | Options for delivering DSNs, passed to `MXDelivery` (e.g. `:port`). |
 
-All durations are in milliseconds. The defaults for `:max_retry_interval` and `:max_age` follow RFC 5321 §4.5.4.1.
+All durations are in milliseconds. The retry defaults follow RFC 5321 §4.5.4.1.

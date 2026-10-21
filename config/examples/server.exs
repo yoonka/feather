@@ -15,8 +15,8 @@ server =
     mail_queue: [
       dir: "/var/spool/feather/queue",
       window: :timer.minutes(15),
-      retry_interval: :timer.minutes(15),
-      max_retry_interval: :timer.hours(4),
+      retry_interval: :timer.minutes(45),
+      max_retry_interval: :timer.hours(3),
       max_age: :timer.hours(5 * 24),
       retry_concurrency: 10
     ],

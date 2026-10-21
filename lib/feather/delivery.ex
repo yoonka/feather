@@ -1,18 +1,35 @@
 defmodule Feather.Delivery do
   @moduledoc """
-  What happens to a message whose delivery failed after it was accepted.
+  Takes responsibility for a message once the session accepts it: spools
+  it, delivers it, retries it and reports failures.
 
-  Once the session has replied 250 to DATA, Feather owns the message
-  (RFC 5321 §4.5.5). When the `deliver/3` phase then halts, each failed
-  recipient is classified by its SMTP reply (see `FeatherAdapters.Adapter`):
+  ## Accepting
 
-    * a temporary (`4xx`) failure is queued in `Feather.MailQueue` and
-      retried by the worker of its bucket (`Feather.MailQueue.BucketWorker`);
+  When the session has run the DATA filters and is about to reply 250,
+  `accept/2` writes the message to the queue's `incoming/` area. The 250 is
+  sent only once the message is on disk, so a crash cannot lose a message
+  Feather has accepted (RFC 5321 §6.1); if the write fails, the session
+  replies 451 and the client keeps the message. Without a `:mail_queue`
+  configuration the message is kept in memory only, as before.
+
+  ## Delivering
+
+  The session then runs the `deliver/3` phase and hands the outcome to
+  `complete/4`. Each failed recipient is classified by its SMTP reply (see
+  `FeatherAdapters.Adapter`):
+
+    * a temporary (`4xx`) failure moves the message into a bucket for retry
+      (`Feather.MailQueue.defer/4`), retried by the bucket's worker
+      (`Feather.MailQueue.BucketWorker`);
     * a permanent (`5xx`) failure is reported to the sender with a DSN
-      (`Feather.DSN`) right away.
+      right away.
 
-  Without a `:mail_queue` configuration every failure is reported with a
-  DSN right away.
+  Without a queue every failure is reported with a DSN right away.
+
+  Each recipient's last failure (its reply and when) is kept in the
+  message's meta, under `:delivery_failures`, along with the time the
+  message arrived (`:arrived_at`), for the DSN sent if delivery is given
+  up on.
 
   ## The delivery adapter
 
@@ -27,6 +44,20 @@ defmodule Feather.Delivery do
         {FeatherAdapters.Logging.MailLogger, ...}
       ]
 
+  ## DSNs
+
+  A DSN (`Feather.DSN`) lists every failed recipient with the status and
+  reply of its actual failure. When delivery is given up on, a recipient's
+  status is that of its last failure, not `4.4.7` (RFC 3463: "the code for
+  the actual problem found when delivery was attempted should be returned
+  rather than this code"); `4.4.7` is used only when no attempt recorded
+  one.
+
+  A DSN is itself a message Feather must deliver (RFC 5321 §6.1): it is
+  spooled and sent like any other, and retried from the queue when its
+  delivery fails temporarily. A DSN is never sent about a message from a
+  null sender, so a DSN that cannot be delivered is dropped.
+
   ## Configuration
 
   The queue is configured in `server.exs`, under `:mail_queue`:
@@ -34,8 +65,8 @@ defmodule Feather.Delivery do
       mail_queue: [
         dir: "/var/spool/feather/queue",
         window: :timer.minutes(15),
-        retry_interval: :timer.minutes(15),
-        max_retry_interval: :timer.hours(4),
+        retry_interval: :timer.minutes(45),
+        max_retry_interval: :timer.hours(3),
         max_age: :timer.hours(5 * 24),
         retry_concurrency: 10
       ]
@@ -49,6 +80,8 @@ defmodule Feather.Delivery do
       on, its senders sent a DSN and the bucket deleted.
     * `:retry_concurrency` — how many messages of a bucket are retried at
       once; see `Feather.MailQueue.BucketWorker` (`:concurrency`).
+    * `:bounce_options` — options for delivering DSNs, passed to
+      `FeatherAdapters.Delivery.MXDelivery` (for instance `:port`).
 
   All durations are in milliseconds.
   """
@@ -58,6 +91,12 @@ defmodule Feather.Delivery do
   alias Feather.MailQueue
   alias Feather.MailQueue.Entry
   alias FeatherAdapters.Adapter
+
+  @default_window :timer.minutes(15)
+  @default_max_age :timer.hours(5 * 24)
+
+  @typedoc "What `accept/2` returns for `complete/4`."
+  @opaque ticket :: %{id: String.t() | nil, meta: map()}
 
   @doc false
   def child_spec(arg) do
@@ -90,54 +129,95 @@ defmodule Feather.Delivery do
     [dir: Keyword.fetch!(config, :dir), deliver: &retry/2, expire: &expire/2] ++ renamed
   end
 
+  # ---- accepting and the first attempt -------------------------------------
+
   @doc """
-  Handles the halt of the session's `deliver/3` phase: queues the
-  temporarily failed recipients and sends a DSN for the others.
+  Takes responsibility for a message the session is about to accept: writes
+  it to the queue's `incoming/` area.
 
-  `meta` is the session meta at the halt; its `:from` and `:to` are the
-  envelope.
+  Returns `{:ok, ticket}` for `complete/4`, or `{:error, reply}` with the
+  SMTP reply to send instead of the 250.
   """
-  @spec handle_failure(binary(), map(), String.t(), module(), term()) :: :ok
-  def handle_failure(raw, meta, hostname, mod, reason) do
-    from = meta[:from]
-    failures = failures(mod, reason, meta[:to] || [])
+  @spec accept(binary(), map()) :: {:ok, ticket()} | {:error, String.t()}
+  def accept(raw, meta) do
+    meta = Map.put(meta, :arrived_at, now())
 
-    {temporary, permanent} =
-      case queue_config() do
-        nil -> {[], failures}
-        _ -> Enum.split_with(failures, fn {_rcpt, reply} -> Adapter.temporary?(reply) end)
-      end
+    case queue_config() do
+      nil ->
+        {:ok, %{id: nil, meta: meta}}
 
-    bounce(from, permanent, hostname)
+      config ->
+        case MailQueue.accept(dir(config), raw, meta[:from], meta[:to] || [], meta: meta) do
+          {:ok, entry} ->
+            {:ok, %{id: entry.id, meta: meta}}
 
-    case temporary do
-      [] ->
-        :ok
-
-      temporary ->
-        rcpts = Enum.map(temporary, &elem(&1, 0))
-
-        case enqueue(raw, from, rcpts, meta) do
-          {:ok, bucket, entry} ->
-            Logger.info("[DELIVERY] Queued #{bucket}/#{entry.id} for #{Enum.join(rcpts, ", ")}")
-            start_bucket(bucket)
-
-          {:error, error} ->
-            Logger.error("[DELIVERY] Could not queue message: #{inspect(error)}")
-            bounce(from, temporary, hostname)
+          {:error, reason} ->
+            Logger.error("[DELIVERY] Cannot spool an accepted message: #{inspect(reason)}")
+            {:error, "451 4.3.0 Requested action aborted: cannot queue the message"}
         end
-
-        :ok
     end
   end
 
-  defp enqueue(raw, from, rcpts, meta) do
-    config = queue_config()
+  @doc """
+  Finishes the first delivery attempt of a message accepted with
+  `accept/2`.
 
-    MailQueue.enqueue(Keyword.fetch!(config, :dir), raw, from, rcpts,
-      meta: meta,
-      window: Keyword.get(config, :window, :timer.minutes(15))
-    )
+  `result` is `:ok`, or `{:halt, adapter, reason, meta}` for a `deliver/3`
+  phase that halted, `meta` being the session meta at the halt.
+  """
+  @spec complete(ticket(), binary(), String.t(), :ok | {:halt, module(), term(), map()}) :: :ok
+  def complete(%{id: id}, _raw, _hostname, :ok) do
+    if id, do: MailQueue.remove(dir(queue_config()), :incoming, id)
+    :ok
+  end
+
+  def complete(%{id: id, meta: accepted}, raw, hostname, {:halt, mod, reason, meta}) do
+    meta = Map.merge(meta, Map.take(accepted, [:arrived_at]))
+    from = meta[:from]
+    failures = failures(mod, reason, meta[:to] || [])
+    at = now()
+
+    {temporary, permanent} =
+      if id, do: Enum.split_with(failures, &temporary?/1), else: {[], failures}
+
+    bounce(from, Enum.map(permanent, &failure(&1, at)), raw, meta, hostname)
+
+    cond do
+      is_nil(id) ->
+        :ok
+
+      temporary == [] ->
+        MailQueue.remove(dir(queue_config()), :incoming, id)
+        :ok
+
+      true ->
+        entry = %Entry{
+          id: id,
+          from: from,
+          recipients: Enum.map(temporary, &elem(&1, 0)),
+          meta: record_failures(meta, temporary, at)
+        }
+
+        defer(entry)
+    end
+  end
+
+  defp defer(%Entry{id: id} = entry) do
+    config = queue_config()
+    window = Keyword.get(config, :window, @default_window)
+
+    case MailQueue.defer(dir(config), id, entry, window: window) do
+      {:ok, bucket} ->
+        Logger.info(
+          "[DELIVERY] Queued #{bucket}/#{id} for retry: #{Enum.join(entry.recipients, ", ")}"
+        )
+
+        start_bucket(bucket)
+
+      {:error, reason} ->
+        # Still in incoming/: deferred and retried on the next start.
+        Logger.error("[DELIVERY] Cannot defer #{id}, left in incoming: #{inspect(reason)}")
+    end
   end
 
   # A new bucket needs its worker; for a bucket that has one this is a no-op.
@@ -151,12 +231,33 @@ defmodule Feather.Delivery do
     end
   end
 
+  # ---- retrying ------------------------------------------------------------
+
   @doc """
   Retries a queued message with the delivery adapter of the current
-  pipeline. Recipients that fail permanently are reported with a DSN;
-  those that fail temporarily are returned for the next retry.
+  pipeline (or, for a DSN, straight to the sender's mail exchangers).
+  Recipients that fail permanently are reported with a DSN; those that
+  fail temporarily are returned for the next retry, with their failure
+  recorded.
   """
-  @spec retry(Entry.t(), binary()) :: :ok | {:retry, [String.t()], term()} | {:error, term()}
+  @spec retry(Entry.t(), binary()) :: :ok | {:retry, Entry.t(), term()} | {:error, term()}
+  def retry(%Entry{meta: %{dsn: true}} = entry, raw) do
+    [to] = entry.recipients
+
+    case DSN.deliver(to, raw, hostname(), bounce_options()) do
+      :ok ->
+        :ok
+
+      {:error, reply} ->
+        if Adapter.temporary?(reply) do
+          {:retry, %{entry | meta: record_failures(entry.meta, [{to, reply}], now())}, reply}
+        else
+          Logger.warning("[DELIVERY] Dropped the DSN to <#{to}>, failed permanently: #{reply}")
+          {:retry, %{entry | recipients: []}, reply}
+        end
+    end
+  end
+
   def retry(%Entry{} = entry, raw) do
     case delivery_adapter(Feather.PipelineManager.get_pipeline()) do
       nil ->
@@ -175,25 +276,57 @@ defmodule Feather.Delivery do
             :ok
 
           {:halt, reason, _state} ->
+            at = now()
+
             {temporary, permanent} =
               mod
               |> failures(reason, entry.recipients)
-              |> Enum.split_with(fn {_rcpt, reply} -> Adapter.temporary?(reply) end)
+              |> Enum.split_with(&temporary?/1)
 
-            bounce(entry.from, permanent, hostname())
-            {:retry, Enum.map(temporary, &elem(&1, 0)), Adapter.reply(mod, reason)}
+            bounce(entry.from, Enum.map(permanent, &failure(&1, at)), raw, entry.meta, hostname())
+
+            entry = %{
+              entry
+              | recipients: Enum.map(temporary, &elem(&1, 0)),
+                meta: record_failures(entry.meta, temporary, at)
+            }
+
+            {:retry, entry, Adapter.reply(mod, reason)}
         end
     end
   end
 
   @doc """
   Gives up on a queued message: reports its remaining recipients to the
-  sender with a DSN.
+  sender with a DSN, each with the status of its last failure.
   """
   @spec expire(Entry.t(), binary()) :: :ok
-  def expire(%Entry{} = entry, _raw) do
-    reply = "554 4.4.7 Delivery time expired: retried without success, giving up"
-    bounce(entry.from, Enum.map(entry.recipients, &{&1, reply}), hostname())
+  def expire(%Entry{meta: %{dsn: true}, recipients: [to]}, _raw) do
+    Logger.warning("[DELIVERY] Gave up on the DSN to <#{to}>")
+    :ok
+  end
+
+  def expire(%Entry{} = entry, raw) do
+    days = Float.round(max_age() / :timer.hours(24), 1)
+    recorded = entry.meta[:delivery_failures] || %{}
+
+    failures =
+      Enum.map(entry.recipients, fn rcpt ->
+        case recorded[rcpt] do
+          %{reply: reply, at: at} ->
+            failure({rcpt, reply}, at)
+            |> Map.update!(:reason, &"Delivery time expired, last error: #{&1}")
+
+          nil ->
+            %{recipient: rcpt, status: "4.4.7", reason: "Delivery time expired"}
+        end
+      end)
+
+    bounce(entry.from, failures, raw, entry.meta, hostname(),
+      summary:
+        "Your message could not be delivered to these recipients within #{days} days, " <>
+          "and delivery has been abandoned:"
+    )
   end
 
   @doc """
@@ -215,6 +348,8 @@ defmodule Feather.Delivery do
     end
   end
 
+  # ---- failures ------------------------------------------------------------
+
   # [{recipient, reply}] for a deliver/3 halt: the adapter's own list when
   # it failed for some recipients only, else every recipient with the
   # formatted reason.
@@ -225,47 +360,143 @@ defmodule Feather.Delivery do
     Enum.map(recipients, &{&1, reply})
   end
 
-  # One DSN per distinct reply, so each carries the right status.
-  defp bounce(from, failures, hostname) do
-    failures
-    |> Enum.group_by(&elem(&1, 1), &elem(&1, 0))
-    |> Enum.each(fn {reply, rcpts} ->
-      {status, diagnostic} = dsn_info(reply)
+  defp temporary?({_rcpt, reply}), do: Adapter.temporary?(reply)
 
-      Logger.info(
-        "[DELIVERY] Failed for #{Enum.join(rcpts, ", ")} (status #{status}), " <>
-          "reporting to <#{from}>: #{reply}"
-      )
-
-      DSN.notify_failure(from, rcpts, reply,
-        hostname: hostname,
-        diagnostic_code: diagnostic,
-        status: status
-      )
-    end)
+  defp record_failures(meta, failures, at) do
+    recorded = Map.new(failures, fn {rcpt, reply} -> {rcpt, %{reply: reply, at: at}} end)
+    Map.update(meta, :delivery_failures, recorded, &Map.merge(&1, recorded))
   end
 
-  # Extracts the DSN status code and diagnostic from a formatted reply,
-  # e.g. "550 5.0.0 Remote server 10.60.5.4 rejected: 550 5.1.1 User unknown"
-  # gives {"5.0.0", "smtp; 550 5.1.1 User unknown"}.
+  # A DSN entry for one failure, from the reply an adapter formatted, e.g.
+  # "550 5.0.0 Remote server mx.example.org rejected: 550 5.1.1 no such user".
+  defp failure({rcpt, reply}, at) do
+    %{
+      recipient: rcpt,
+      status: status(reply),
+      reason: reply,
+      diagnostic: remote_reply(reply),
+      remote_mta: remote_mta(reply),
+      last_attempt: at && DateTime.from_unix!(at, :millisecond)
+    }
+  end
+
   @doc false
-  def dsn_info(reply) when is_binary(reply) do
-    status =
-      case Regex.run(~r/(\d\.\d+\.\d+)/, reply) do
-        [_, code] -> code
-        _ -> "5.0.0"
-      end
-
-    diagnostic =
-      case Regex.run(~r/(?:rejected|failed):\s*(.+)$/s, reply) do
-        [_, msg] -> "smtp; #{String.trim(msg)}"
-        _ -> "smtp; #{reply}"
-      end
-
-    {status, diagnostic}
+  # The RFC 3463 status of a reply: the enhanced code of the remote
+  # server's reply when there is one, else that of the reply itself, else
+  # the class of its basic code.
+  def status(reply) do
+    enhanced(remote_reply(reply) || "") || enhanced(reply) ||
+      if(String.starts_with?(reply, "4"), do: "4.0.0", else: "5.0.0")
   end
 
-  def dsn_info(reply), do: {"5.0.0", "smtp; #{inspect(reply)}"}
+  # Not preceded or followed by a digit or a dot, so an IP address such as
+  # 127.0.0.1 is not taken for a status code.
+  defp enhanced(text) do
+    case Regex.run(~r/(?<![\d.])([245]\.\d{1,3}\.\d{1,3})(?![\d.])/, text) do
+      [_, code] -> code
+      nil -> nil
+    end
+  end
+
+  # The remote server's own reply, quoted by MXDelivery and SMTPForward
+  # after "rejected:" or "failed:".
+  defp remote_reply(reply) do
+    case Regex.run(~r/(?:rejected|failed):\s*(\d{3}\b.*)\z/s, reply) do
+      [_, remote] -> String.trim(remote)
+      nil -> nil
+    end
+  end
+
+  defp remote_mta(reply) do
+    case Regex.run(~r/Remote server (\S+) (?:rejected|temporarily failed)/, reply) do
+      [_, host] -> host
+      nil -> nil
+    end
+  end
+
+  # ---- DSNs ----------------------------------------------------------------
+
+  defp bounce(from, failures, raw, meta, hostname, opts \\ [])
+
+  defp bounce(_from, [], _raw, _meta, _hostname, _opts), do: :ok
+
+  # RFC 5321 §6.1: no notification for a message with a null reverse-path.
+  defp bounce(from, failures, _raw, _meta, _hostname, _opts) when from in ["", nil] do
+    for failure <- failures do
+      Logger.info(
+        "[DELIVERY] Failed for #{failure.recipient} (status #{failure.status}), " <>
+          "not reported: null sender"
+      )
+    end
+
+    :ok
+  end
+
+  defp bounce(from, failures, raw, meta, hostname, opts) do
+    for failure <- failures do
+      Logger.info(
+        "[DELIVERY] Failed for #{failure.recipient} (status #{failure.status}), " <>
+          "reporting to <#{from}>: #{failure.reason}"
+      )
+    end
+
+    arrival = meta[:arrived_at] && DateTime.from_unix!(meta[:arrived_at], :millisecond)
+
+    dsn =
+      DSN.build(from, failures,
+        hostname: hostname,
+        arrival_date: arrival,
+        original: raw,
+        summary: opts[:summary]
+      )
+
+    send_dsn(from, dsn, hostname)
+  end
+
+  # A DSN is spooled and sent like any other accepted message, and retried
+  # from the queue when its delivery fails temporarily.
+  defp send_dsn(to, dsn, hostname) do
+    id =
+      with config when config != nil <- queue_config(),
+           {:ok, entry} <-
+             MailQueue.accept(dir(config), dsn, "", [to], meta: %{dsn: true, arrived_at: now()}) do
+        entry.id
+      else
+        nil ->
+          nil
+
+        {:error, reason} ->
+          Logger.error("[DELIVERY] Cannot spool the DSN to <#{to}>: #{inspect(reason)}")
+          nil
+      end
+
+    Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
+      case DSN.deliver(to, dsn, hostname, bounce_options()) do
+        :ok ->
+          Logger.info("[DSN] Sent to <#{to}>")
+          if id, do: MailQueue.remove(dir(queue_config()), :incoming, id)
+
+        {:error, reply} ->
+          cond do
+            id && Adapter.temporary?(reply) ->
+              Logger.warning("[DSN] Delivery to <#{to}> failed, will retry: #{reply}")
+
+              defer(%Entry{
+                id: id,
+                from: "",
+                recipients: [to],
+                meta: record_failures(%{dsn: true, arrived_at: now()}, [{to, reply}], now())
+              })
+
+            true ->
+              Logger.error("[DSN] Delivery to <#{to}> failed, dropped: #{reply}")
+              if id, do: MailQueue.remove(dir(queue_config()), :incoming, id)
+          end
+      end
+    end)
+
+    :ok
+  end
 
   # ---- configuration -------------------------------------------------------
 
@@ -273,8 +504,16 @@ defmodule Feather.Delivery do
 
   defp queue_config, do: server_config()[:mail_queue]
 
+  defp dir(config), do: Keyword.fetch!(config, :dir)
+
+  defp max_age, do: (queue_config() || [])[:max_age] || @default_max_age
+
+  defp bounce_options, do: (queue_config() || [])[:bounce_options] || []
+
   defp callback_options, do: (server_config()[:sessionoptions] || [])[:callbackoptions] || []
 
   # The name the session reports as, which gen_smtp takes from `:domain`.
   defp hostname, do: to_string(server_config()[:domain] || :smtp_util.guess_FQDN())
+
+  defp now, do: System.os_time(:millisecond)
 end

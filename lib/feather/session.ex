@@ -190,31 +190,37 @@ defmodule Feather.Session do
             {:error, reply, rejected_state}
 
           {:ok, accepted_state} ->
-            # Accepted. Delivery (routing + transformers + handoff) runs
-            # asynchronously: RFC 5321 §4.5.5 / RFC 3461 §4 — once we return
-            # 250 we own the message, so a *delivery* failure (not a policy
-            # rejection) MUST be retried or reported to the sender via DSN.
-            Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
-              case run_step(:deliver, sanitized, accepted_state) do
-                {:ok, _} ->
-                  Logger.info("[SESSION] Message delivered successfully from #{from}")
+            # RFC 5321 §6.1: the 250 makes us responsible for the message, so
+            # it is spooled to disk first; if that fails, the client keeps it.
+            case Feather.Delivery.accept(sanitized, accepted_state.meta) do
+              {:ok, ticket} ->
+                # Delivery (routing + transformers + handoff) runs
+                # asynchronously: a *delivery* failure (not a policy
+                # rejection) is retried or reported to the sender via DSN
+                # (RFC 5321 §4.5.5 / RFC 3461 §4).
+                Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
+                  result =
+                    case run_step(:deliver, sanitized, accepted_state) do
+                      {:ok, _} ->
+                        Logger.info("[SESSION] Message delivered successfully from #{from}")
+                        :ok
 
-                {:halt, mod, reason, failed_state} ->
-                  Logger.warning(
-                    "[SESSION] Delivery failed from #{from}: #{format_reason({mod, reason})}"
-                  )
+                      {:halt, mod, reason, failed_state} ->
+                        Logger.warning(
+                          "[SESSION] Delivery failed from #{from}: #{format_reason({mod, reason})}"
+                        )
 
-                  Feather.Delivery.handle_failure(
-                    sanitized,
-                    failed_state.meta,
-                    hostname,
-                    mod,
-                    reason
-                  )
-              end
-            end)
+                        {:halt, mod, reason, failed_state.meta}
+                    end
 
-            {:ok, "2.0.0 OK: message queued for delivery", accepted_state}
+                  Feather.Delivery.complete(ticket, sanitized, hostname, result)
+                end)
+
+                {:ok, "2.0.0 OK: message queued for delivery", accepted_state}
+
+              {:error, reply} ->
+                {:error, reply, accepted_state}
+            end
         end
 
       {:error, reason} ->

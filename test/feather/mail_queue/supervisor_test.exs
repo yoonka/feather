@@ -54,6 +54,26 @@ defmodule Feather.MailQueue.SupervisorTest do
     assert MailQueue.list(dir, slow) == []
   end
 
+  test "a message left in incoming/ by a crash is deferred and retried", %{tmp_dir: dir} do
+    {:ok, entry} = MailQueue.accept(dir, @raw, "a@example.com", ["b@example.org"])
+    test = self()
+
+    deliver = fn entry, _raw ->
+      send(test, {:delivering, entry.recipients, self()})
+      :ok
+    end
+
+    start_supervised!({MailQueue.Supervisor, opts(dir, deliver)})
+
+    assert_receive {:delivering, ["b@example.org"], _}
+    assert MailQueue.list(dir, :incoming) == []
+
+    # Wait for the bucket's retry to finish, then it is delivered and gone.
+    assert [bucket] = MailQueue.buckets(dir)
+    :sys.get_state(MailQueue.Supervisor.whereis(bucket))
+    refute entry.id in MailQueue.list(dir, bucket)
+  end
+
   test "start_bucket starts a bucket's worker once", %{tmp_dir: dir} do
     opts = opts(dir, fn _, _ -> {:error, :busy} end)
     start_supervised!({MailQueue.Supervisor, opts})

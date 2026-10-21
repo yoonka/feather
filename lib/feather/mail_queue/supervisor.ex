@@ -2,10 +2,12 @@ defmodule Feather.MailQueue.Supervisor do
   @moduledoc """
   Runs one `Feather.MailQueue.BucketWorker` per bucket of the queue.
 
-  On start it resumes the queue: every bucket already on disk gets a
-  worker, which retries it right away. After that, `start_bucket/2` starts
-  the worker of a bucket a message was just queued in; starting the worker
-  of a bucket that already has one is a no-op.
+  On start it resumes the queue: messages left in `incoming/` (their first
+  delivery attempt was cut short by a crash) are deferred into a bucket,
+  then every bucket on disk gets a worker, which retries it right away.
+  After that, `start_bucket/2` starts the worker of a bucket a message was
+  just deferred into; starting the worker of a bucket that already has one
+  is a no-op.
 
   Workers are registered by bucket in `Feather.MailQueue.Registry` and
   supervised `:transient`: a worker that crashes is restarted, one that
@@ -73,7 +75,21 @@ defmodule Feather.MailQueue.Supervisor do
   end
 
   defp resume(opts) do
-    buckets = MailQueue.buckets(Keyword.fetch!(opts, :dir))
+    dir = Keyword.fetch!(opts, :dir)
+
+    # Messages still in incoming/ had their first delivery attempt cut
+    # short by a crash; they are deferred and retried with the rest.
+    for id <- MailQueue.list(dir, :incoming) do
+      with {:ok, entry, _raw} <- MailQueue.get(dir, :incoming, id),
+           {:ok, bucket} <- MailQueue.defer(dir, id, entry, Keyword.take(opts, [:window])) do
+        Logger.info("[QUEUE] Recovered interrupted delivery #{id} into bucket #{bucket}")
+      else
+        {:error, reason} ->
+          Logger.error("[QUEUE] Cannot recover incoming #{id}: #{inspect(reason)}")
+      end
+    end
+
+    buckets = MailQueue.buckets(dir)
 
     for bucket <- buckets do
       case start_bucket(opts, bucket, retry_now: true) do

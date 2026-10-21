@@ -1,11 +1,21 @@
 defmodule Feather.MailQueue do
   @moduledoc """
-  A file-backed queue of messages whose delivery failed.
+  A file-backed queue of the messages Feather has accepted and not yet
+  delivered.
 
-  Once Feather has replied 250 to DATA it owns the message (RFC 5321
-  §4.5.5), so a delivery that fails must not drop it. This module persists
-  the message and its envelope to disk so that it survives a restart. It
-  holds no process state; every function takes the queue directory.
+  Once Feather has replied 250 to DATA it owns the message: it "MUST NOT
+  lose the message for frivolous reasons, such as because the host later
+  crashes" (RFC 5321 §6.1). This module persists the message and its
+  envelope to disk so that it survives a restart. It holds no process
+  state; every function takes the queue directory.
+
+  ## Incoming
+
+  A message is written to `incoming/` before the 250 is sent (`accept/5`),
+  and stays there while its first delivery attempt runs. It is then either
+  removed, delivered, or moved into a bucket for retry (`defer/4`). A
+  message still in `incoming/` after a restart had its first attempt
+  interrupted, and is deferred and retried.
 
   ## Buckets
 
@@ -17,8 +27,11 @@ defmodule Feather.MailQueue do
 
   ## Layout
 
-      <dir>/<bucket>/<id>.eml    the envelope, then the raw message
+      <dir>/incoming/<id>.eml    accepted, first delivery attempt running
+      <dir>/<bucket>/<id>.eml    deferred, awaiting retry
       <dir>/tmp/                 staging area for atomic writes
+
+  A location is either a bucket or `:incoming`.
 
   The envelope is written as the first three lines of the `.eml` file and
   stripped again when the message is read back:
@@ -32,8 +45,9 @@ defmodule Feather.MailQueue do
   and its transformers the same meta the first attempt had.
 
   Every file is written to `tmp/` with mode `0600`, flushed to disk and then
-  renamed into place, so a reader never sees a partial file. A bucket folder
-  is removed once its last message is.
+  renamed into place, so a reader never sees a partial file. Moving a
+  message from `incoming/` to a bucket is a rename too. A bucket folder is
+  removed once its last message is.
 
   ## Options
 
@@ -51,6 +65,59 @@ defmodule Feather.MailQueue do
   @from_header "X-Feather-Envelope-From: "
   @to_header "X-Feather-Envelope-To: "
   @meta_header "X-Feather-Envelope-Meta: "
+
+  @type location :: non_neg_integer() | :incoming
+
+  @doc """
+  Writes an accepted message to `incoming/`, before its first delivery
+  attempt.
+  """
+  @spec accept(Path.t(), iodata(), String.t(), [String.t()], keyword()) ::
+          {:ok, Entry.t()} | {:error, term()}
+  def accept(dir, raw, from, recipients, opts \\ []) do
+    meta = opts |> Keyword.get(:meta, %{}) |> Map.drop([:from, :to])
+    entry = %Entry{id: generate_id(), from: from, recipients: recipients, meta: meta}
+
+    with :ok <- validate_addresses([from | recipients]),
+         :ok <- write_new(dir, :incoming, entry.id, [envelope(entry), raw]),
+         do: {:ok, entry}
+  end
+
+  @doc """
+  Moves a message from `incoming/` into a bucket for retry, with the
+  envelope of `entry` (the recipients still to retry, the updated meta).
+
+  The bucket is chosen as for `enqueue/5`.
+  """
+  @spec defer(Path.t(), String.t(), Entry.t(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def defer(dir, id, %Entry{} = entry, opts \\ []) do
+    now = Keyword.get_lazy(opts, :now, fn -> System.os_time(:millisecond) end)
+    entry = %{entry | id: id}
+
+    with :ok <- validate_id(id),
+         {:ok, _old, raw} <- get(dir, :incoming, id),
+         # Rewrite in place first: a crash before the rename leaves the
+         # updated message in incoming/, to be deferred on restart.
+         {:ok, _} <- update(dir, :incoming, entry, raw) do
+      bucket = pick_bucket(dir, now, Keyword.get(opts, :window, @default_window))
+
+      result =
+        case move(dir, id, bucket) do
+          # The bucket was emptied and removed between creating it and
+          # moving into it; it is recreated.
+          {:error, :enoent} -> move(dir, id, bucket)
+          result -> result
+        end
+
+      with :ok <- result, do: {:ok, bucket}
+    end
+  end
+
+  defp move(dir, id, bucket) do
+    with :ok <- File.mkdir_p(bucket_dir(dir, bucket)),
+         do: File.rename(message_path(dir, :incoming, id), message_path(dir, bucket, id))
+  end
 
   @doc """
   Adds a message to the queue.
@@ -105,9 +172,9 @@ defmodule Feather.MailQueue do
   end
 
   @doc """
-  Returns the ids of the messages in a bucket, oldest first.
+  Returns the ids of the messages in a location, oldest first.
   """
-  @spec list(Path.t(), non_neg_integer()) :: [String.t()]
+  @spec list(Path.t(), location()) :: [String.t()]
   def list(dir, bucket) do
     case File.ls(bucket_dir(dir, bucket)) do
       {:ok, files} ->
@@ -125,7 +192,7 @@ defmodule Feather.MailQueue do
   @doc """
   Reads one message: its envelope and the raw message as it was queued.
   """
-  @spec get(Path.t(), non_neg_integer(), String.t()) ::
+  @spec get(Path.t(), location(), String.t()) ::
           {:ok, Entry.t(), binary()} | {:error, term()}
   def get(dir, bucket, id) do
     with :ok <- validate_id(id),
@@ -135,19 +202,24 @@ defmodule Feather.MailQueue do
   end
 
   @doc """
-  Replaces the recipients of a queued message, after some of them were
-  delivered or failed for good.
+  Replaces the envelope of a queued message with that of `entry`: its
+  recipients (after some were delivered or failed for good) and its meta.
+  The message itself is kept; pass `raw` when it was already read.
   """
-  @spec update_recipients(Path.t(), non_neg_integer(), String.t(), [String.t()]) ::
+  @spec update(Path.t(), location(), Entry.t(), binary() | nil) ::
           {:ok, Entry.t()} | {:error, term()}
-  def update_recipients(dir, bucket, id, recipients) do
-    with :ok <- validate_addresses(recipients),
-         {:ok, %Entry{} = entry, raw} <- get(dir, bucket, id) do
-      entry = %{entry | recipients: recipients}
+  def update(dir, location, %Entry{id: id} = entry, raw \\ nil) do
+    entry = %{entry | meta: Map.drop(entry.meta, [:from, :to])}
 
-      with :ok <- atomic_write(dir, message_path(dir, bucket, id), [envelope(entry), raw]),
-           do: {:ok, entry}
-    end
+    with :ok <- validate_id(id),
+         :ok <- validate_addresses([entry.from | entry.recipients]),
+         {:ok, raw} <- if(raw, do: {:ok, raw}, else: read_raw(dir, location, id)),
+         :ok <- atomic_write(dir, message_path(dir, location, id), [envelope(entry), raw]),
+         do: {:ok, entry}
+  end
+
+  defp read_raw(dir, location, id) do
+    with {:ok, _entry, raw} <- get(dir, location, id), do: {:ok, raw}
   end
 
   @doc """
@@ -166,13 +238,13 @@ defmodule Feather.MailQueue do
 
   Removing a message that is already gone is not an error.
   """
-  @spec remove(Path.t(), non_neg_integer(), String.t()) :: :ok | {:error, term()}
-  def remove(dir, bucket, id) do
+  @spec remove(Path.t(), location(), String.t()) :: :ok | {:error, term()}
+  def remove(dir, location, id) do
     with :ok <- validate_id(id),
-         :ok <- rm(message_path(dir, bucket, id)) do
+         :ok <- rm(message_path(dir, location, id)) do
       # rmdir only succeeds on an empty folder, so a bucket that another
       # message has just joined is left alone.
-      _ = File.rmdir(bucket_dir(dir, bucket))
+      if is_integer(location), do: File.rmdir(bucket_dir(dir, location))
       :ok
     end
   end
@@ -284,6 +356,7 @@ defmodule Feather.MailQueue do
   end
 
   defp tmp_dir(dir), do: Path.join(dir, "tmp")
+  defp bucket_dir(dir, :incoming), do: Path.join(dir, "incoming")
   defp bucket_dir(dir, bucket), do: Path.join(dir, Integer.to_string(bucket))
   defp message_path(dir, bucket, id), do: Path.join(bucket_dir(dir, bucket), id <> ".eml")
 

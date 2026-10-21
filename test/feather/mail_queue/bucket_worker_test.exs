@@ -75,21 +75,37 @@ defmodule Feather.MailQueue.BucketWorkerTest do
     assert_receive {:delivered, ["a@example.org"]}, 100
   end
 
-  test "keeps only the recipients still to retry", %{tmp_dir: dir} do
+  test "keeps the envelope deliver returns: the recipients left, the meta", %{tmp_dir: dir} do
     {:ok, bucket, entry} = MailQueue.enqueue(dir, @raw, "", ["a@example.org", "b@example.org"])
 
     test = self()
 
-    deliver = fn _entry, _raw ->
+    deliver = fn entry, _raw ->
       send(test, :retried)
-      {:retry, ["b@example.org"], "451 later"}
+      {:retry, %{entry | recipients: ["b@example.org"], meta: %{last: "451 later"}}, "451 later"}
     end
 
     pid = start(dir, bucket, deliver: deliver, retry_now: true)
     assert_receive :retried
     :sys.get_state(pid)
 
-    assert {:ok, %{recipients: ["b@example.org"]}, @raw} = MailQueue.get(dir, bucket, entry.id)
+    assert {:ok, %{recipients: ["b@example.org"], meta: %{last: "451 later"}}, @raw} =
+             MailQueue.get(dir, bucket, entry.id)
+  end
+
+  test "removes a message deliver leaves no recipients for", %{tmp_dir: dir} do
+    {:ok, bucket, _} = MailQueue.enqueue(dir, @raw, "", ["a@example.org"])
+    {:ok, ^bucket, kept} = MailQueue.enqueue(dir, @raw, "", ["b@example.org"])
+
+    deliver = fn
+      %{recipients: ["a@example.org"]} = entry, _ -> {:retry, %{entry | recipients: []}, "550"}
+      _entry, _ -> {:error, :busy}
+    end
+
+    pid = start(dir, bucket, deliver: deliver, retry_now: true)
+    :sys.get_state(pid)
+
+    assert MailQueue.list(dir, bucket) == [kept.id]
   end
 
   test "stops once its bucket is emptied and closed to new messages", %{tmp_dir: dir} do

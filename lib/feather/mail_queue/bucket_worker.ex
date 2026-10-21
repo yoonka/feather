@@ -12,8 +12,14 @@ defmodule Feather.MailQueue.BucketWorker do
   The bucket is retried at ages `:interval`, `2 × :interval`,
   `4 × :interval` and so on: the gap between retries doubles, up to
   `:max_interval`, after which the bucket is retried every `:max_interval`.
-  With a 15 minute interval and a 4 hour cap, a bucket is retried at 15
-  minutes, 30 minutes, 1 hour, 2 hours, 4 hours, 8 hours, 12 hours, …
+  With the defaults, a 45 minute interval and a 3 hour cap, a bucket is
+  retried at 45 minutes, 1½ hours, 3 hours, 6 hours, 9 hours, …
+
+  The interval is counted from when the bucket was opened, so a message
+  that joined the bucket `:window` after it opened waits `:interval -
+  :window` for its first retry. RFC 5321 §4.5.4.1 asks for retries no more
+  often than every 30 minutes, hence the default of the window plus 30
+  minutes.
 
   The worker stops itself when either
 
@@ -39,10 +45,13 @@ defmodule Feather.MailQueue.BucketWorker do
 
     * `:ok` — the message is done with: every recipient was delivered, or
       failed permanently and was reported. It is removed from the queue.
-    * `{:retry, recipients, reason}` — `recipients` are still to be retried;
-      the others are done with. The message is kept for just those, or
-      removed when the list is empty.
-    * `{:error, reason}` — every recipient is still to be retried.
+    * `{:retry, entry, reason}` — `entry.recipients` are still to be
+      retried; the others are done with. The message is kept with the
+      envelope of `entry` (its recipients and meta, such as the last
+      failure of each recipient), or removed when it has no recipients
+      left.
+    * `{:error, reason}` — every recipient is still to be retried, and the
+      envelope is kept as it is.
 
   ## Options
 
@@ -52,9 +61,9 @@ defmodule Feather.MailQueue.BucketWorker do
     * `:expire` — `(Entry.t(), binary() -> any())`, called for each message
       left when the bucket is given up on (default: does nothing).
     * `:interval` — the first retry point, in milliseconds (default:
-      900000, 15 minutes).
+      2700000, 45 minutes).
     * `:max_interval` — the longest gap between retries, in milliseconds
-      (default: 14400000, 4 hours).
+      (default: 10800000, 3 hours).
     * `:max_age` — the age, in milliseconds, at which the bucket is given
       up on (default: 432000000, five days).
     * `:window` — the queue's bucket window, in milliseconds (default:
@@ -70,8 +79,8 @@ defmodule Feather.MailQueue.BucketWorker do
   alias Feather.Logger
   alias Feather.MailQueue
 
-  @default_interval :timer.minutes(15)
-  @default_max_interval :timer.hours(4)
+  @default_interval :timer.minutes(45)
+  @default_max_interval :timer.hours(3)
   @default_max_age :timer.hours(5 * 24)
   @default_window :timer.minutes(15)
   @default_concurrency 10
@@ -165,18 +174,17 @@ defmodule Feather.MailQueue.BucketWorker do
             Logger.info("[QUEUE] Delivered queued message #{bucket}/#{id}")
             MailQueue.remove(dir, bucket, id)
 
-          {:retry, [], _reason} ->
-            Logger.info("[QUEUE] Delivered queued message #{bucket}/#{id}")
+          {:retry, %{recipients: []}, _reason} ->
+            Logger.info("[QUEUE] Done with queued message #{bucket}/#{id}")
             MailQueue.remove(dir, bucket, id)
 
-          {:retry, recipients, reason} ->
+          {:retry, updated, reason} ->
             Logger.warning(
-              "[QUEUE] Retry of #{bucket}/#{id} failed for #{Enum.join(recipients, ", ")}: " <>
-                format(reason)
+              "[QUEUE] Retry of #{bucket}/#{id} failed for " <>
+                "#{Enum.join(updated.recipients, ", ")}: #{format(reason)}"
             )
 
-            if recipients != entry.recipients,
-              do: MailQueue.update_recipients(dir, bucket, id, recipients)
+            if updated != entry, do: MailQueue.update(dir, bucket, %{updated | id: id}, raw)
 
           {:error, reason} ->
             Logger.warning("[QUEUE] Retry of #{bucket}/#{id} failed: #{format(reason)}")
@@ -203,7 +211,7 @@ defmodule Feather.MailQueue.BucketWorker do
   defp call(fun, entry, raw) do
     case fun.(entry, raw) do
       :ok -> :ok
-      {:retry, recipients, reason} when is_list(recipients) -> {:retry, recipients, reason}
+      {:retry, %MailQueue.Entry{} = entry, reason} -> {:retry, entry, reason}
       {:error, reason} -> {:error, reason}
       other -> {:error, {:unexpected_result, other}}
     end
