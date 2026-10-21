@@ -27,6 +27,22 @@ defmodule FeatherAdapters.Adapter do
       the server owns the message at that point, so a failure is reported to the
       sender via DSN (RFC 5321 §4.5.5 / RFC 3461 §4). Delivery/routing adapters
       implement this.
+
+  ## Delivery failures
+
+  A `deliver/3` halt is classified by the SMTP reply its reason formats to:
+  a `4xx` reply is a temporary failure, queued for retry when a mail queue
+  is configured (see `Feather.Delivery`), and a `5xx` reply is a permanent
+  one, reported to the sender with a DSN.
+
+  An adapter that delivers to several recipients and fails for only some of
+  them halts with
+
+      {:failed_recipients, [{recipient, reply}]}
+
+  where each `reply` is the formatted SMTP reply for that recipient. The
+  recipients left out were delivered, so only the listed ones are retried
+  or reported.
   """
 
   @type meta :: Feather.Types.meta()
@@ -77,4 +93,43 @@ defmodule FeatherAdapters.Adapter do
                       deliver: 3,
                       terminate: 3,
                       format_reason: 1
+
+  @type failures :: [{recipient :: String.t(), reply :: String.t()}]
+
+  @doc """
+  Formats a halt `reason` of adapter `mod` into an SMTP reply, with the
+  adapter's `format_reason/1` when it has one.
+  """
+  @spec reply(module(), term()) :: String.t()
+  def reply(_mod, {:failed_recipients, failures}), do: format_failures(failures)
+
+  def reply(mod, reason) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :format_reason, 1) do
+      mod.format_reason(reason)
+    else
+      "550 #{inspect(reason)}"
+    end
+  end
+
+  @doc """
+  Formats a `{:failed_recipients, failures}` reason into one SMTP reply:
+  temporary (`451`) when any recipient may still be retried, permanent
+  (`550`) otherwise.
+  """
+  @spec format_failures(failures()) :: String.t()
+  def format_failures(failures) do
+    code =
+      if Enum.any?(failures, fn {_rcpt, reply} -> temporary?(reply) end),
+        do: "451 4.0.0",
+        else: "550 5.0.0"
+
+    "#{code} Delivery failed for " <>
+      Enum.map_join(failures, "; ", fn {rcpt, reply} -> "#{rcpt}: #{reply}" end)
+  end
+
+  @doc """
+  Whether an SMTP reply is a temporary (`4xx`) failure.
+  """
+  @spec temporary?(String.t()) :: boolean()
+  def temporary?(reply), do: String.starts_with?(reply, "4")
 end

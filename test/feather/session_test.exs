@@ -4,18 +4,12 @@ defmodule Feather.SessionTest do
   alias Feather.Session
 
   setup do
-    # handle_DATA delivers asynchronously under this supervisor.
-    case Task.Supervisor.start_link(name: Feather.DeliverySupervisor) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
-
-    # init/4 reads the pipeline from this manager.
-    case Feather.PipelineManager.start_link([]) do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
-    end
-
+    # handle_DATA delivers asynchronously under this supervisor, and init/4
+    # reads the pipeline from this manager. Started per test and stopped
+    # before the next one starts: one linked to an earlier test could still
+    # be shutting down, and a call to it then exits.
+    start_supervised!({Task.Supervisor, name: Feather.DeliverySupervisor})
+    start_supervised!(Feather.PipelineManager)
     :ok
   end
 

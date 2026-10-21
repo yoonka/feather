@@ -190,31 +190,37 @@ defmodule Feather.Session do
             {:error, reply, rejected_state}
 
           {:ok, accepted_state} ->
-            # Accepted. Delivery (routing + transformers + handoff) runs
-            # asynchronously: RFC 5321 §4.5.5 / RFC 3461 §4 — once we return
-            # 250 we own the message, so a *delivery* failure (not a policy
-            # rejection) MUST be reported to the sender via DSN.
-            Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
-              case step(:deliver, sanitized, accepted_state) do
-                {:ok, _} ->
-                  Logger.info("[SESSION] Message delivered successfully from #{from}")
+            # RFC 5321 §6.1: the 250 makes us responsible for the message, so
+            # it is spooled to disk first; if that fails, the client keeps it.
+            case Feather.Delivery.accept(sanitized, accepted_state.meta) do
+              {:ok, ticket} ->
+                # Delivery (routing + transformers + handoff) runs
+                # asynchronously: a *delivery* failure (not a policy
+                # rejection) is retried or reported to the sender via DSN
+                # (RFC 5321 §4.5.5 / RFC 3461 §4).
+                Task.Supervisor.start_child(Feather.DeliverySupervisor, fn ->
+                  result =
+                    case run_step(:deliver, sanitized, accepted_state) do
+                      {:ok, _} ->
+                        Logger.info("[SESSION] Message delivered successfully from #{from}")
+                        :ok
 
-                {:error, reason, _} ->
-                  Logger.warning(
-                    "[SESSION] Delivery failed from #{from}: #{reason}"
-                  )
+                      {:halt, mod, reason, failed_state} ->
+                        Logger.warning(
+                          "[SESSION] Delivery failed from #{from}: #{format_reason({mod, reason})}"
+                        )
 
-                  {status, diagnostic} = extract_dsn_info(reason)
+                        {:halt, mod, reason, failed_state.meta}
+                    end
 
-                  Feather.DSN.notify_failure(from, to, reason,
-                    hostname: hostname,
-                    diagnostic_code: diagnostic,
-                    status: status
-                  )
-              end
-            end)
+                  Feather.Delivery.complete(ticket, sanitized, hostname, result)
+                end)
 
-            {:ok, "2.0.0 OK: message queued for delivery", accepted_state}
+                {:ok, "2.0.0 OK: message queued for delivery", accepted_state}
+
+              {:error, reply} ->
+                {:error, reply, accepted_state}
+            end
         end
 
       {:error, reason} ->
@@ -409,7 +415,16 @@ defmodule Feather.Session do
     end)
   end
 
-  defp step(phase, arg, %{pipeline: pipeline, meta: meta} = state) do
+  defp step(phase, arg, state) do
+    case run_step(phase, arg, state) do
+      {:halt, mod, reason, new_state} -> {:error, format_reason({mod, reason}), new_state}
+      {:ok, new_state} -> {:ok, new_state}
+    end
+  end
+
+  # Like step/3, but a halt keeps the halting adapter and its raw reason, so
+  # the deliver phase can tell which recipients failed and how.
+  defp run_step(phase, arg, %{pipeline: pipeline, meta: meta} = state) do
     Enum.reduce_while(pipeline, {[], meta}, fn {mod, adapter_state}, {acc, meta} ->
       if function_exported?(mod, phase, 3) do
         case apply(mod, phase, [arg, meta, adapter_state]) do
@@ -417,10 +432,8 @@ defmodule Feather.Session do
             {:cont, {[{mod, new_state} | acc], new_meta}}
 
           {:halt, reason, new_state} ->
-            formatted = format_reason({mod, reason})
-
             {:halt,
-             {:error, formatted,
+             {:halt, mod, reason,
               %{state | pipeline: acc ++ [{mod, new_state} | tl(pipeline)], meta: meta}}}
         end
       else
@@ -428,8 +441,8 @@ defmodule Feather.Session do
       end
     end)
     |> case do
-      {:error, reply, new_state} ->
-        {:error, reply, new_state}
+      {:halt, _mod, _reason, _new_state} = halt ->
+        halt
 
       {new_pipeline, new_meta} ->
         {:ok, %{state | pipeline: Enum.reverse(new_pipeline), meta: new_meta}}
@@ -580,36 +593,6 @@ defmodule Feather.Session do
     |> Enum.all?(fn c -> c >= 33 and c <= 126 and c != ?:  end)
   end
 
-  defp format_reason({mod, reason}) do
-    if function_exported?(mod, :format_reason, 1) do
-      mod.format_reason(reason)
-    else
-      "550 #{inspect(reason)}"
-    end
-  end
+  defp format_reason({mod, reason}), do: FeatherAdapters.Adapter.reply(mod, reason)
 
-  # Extracts DSN status code and diagnostic from a formatted reason string.
-  # e.g. "550 5.0.0 Remote server 10.60.5.4 rejected: 550 5.1.1 User unknown"
-  # returns {"5.0.0", "smtp; 550 5.1.1 User unknown"}
-  defp extract_dsn_info(reason) when is_binary(reason) do
-    # Try to extract enhanced status code (x.y.z) from the reason
-    status =
-      case Regex.run(~r/(\d\.\d+\.\d+)/, reason) do
-        [_, code] -> code
-        _ -> "5.0.0"
-      end
-
-    # Extract the SMTP diagnostic — the part after "rejected:" or "failed:"
-    diagnostic =
-      case Regex.run(~r/(?:rejected|failed):\s*(.+)$/s, reason) do
-        [_, msg] -> "smtp; #{String.trim(msg)}"
-        _ -> "smtp; #{reason}"
-      end
-
-    {status, diagnostic}
-  end
-
-  defp extract_dsn_info(reason) do
-    {"5.0.0", "smtp; #{inspect(reason)}"}
-  end
 end

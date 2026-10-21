@@ -21,6 +21,9 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
         - `verify: :verify_peer`
         - `cacerts: :public_key.cacerts_get()`
     - `:username` and `:password` (optional) — if set, enables SMTP AUTH using the provided credentials.
+    - `:unreachable_ttl` (optional, default: `300`) — seconds to skip the
+      server after it could not be reached (see
+      `Feather.Utils.UnreachableHosts`).
 
   ## Example
 
@@ -56,6 +59,7 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
 
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
+  alias Feather.Utils.UnreachableHosts
   require Logger
 
   @impl true
@@ -73,11 +77,25 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
 
   @impl true
   def deliver(raw, %{from: from, to: rcpts} = meta, %{opts: opts} = state) do
-    case deliver_smtp(from, rcpts, raw, opts) do
+    server = Keyword.fetch!(opts, :server)
+
+    # A server that could not be reached is skipped for a while, so every
+    # queued message does not wait out its own connection timeout.
+    result =
+      if UnreachableHosts.unreachable?(server, opts[:port]) do
+        {:error, {:host_unreachable, server}}
+      else
+        deliver_smtp(from, rcpts, raw, opts)
+      end
+
+    case result do
       :ok ->
         {:ok, meta, state}
 
       {:error, reason} ->
+        if UnreachableHosts.network_failure?(reason),
+          do: UnreachableHosts.mark(server, opts[:port], opts[:unreachable_ttl] || 300)
+
         {:halt, {:forwarding_failed, reason}, state}
     end
   end
@@ -97,8 +115,11 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
       :ok -> :ok
       {:ok, _receipt} -> :ok
 
-      resp when is_binary(resp) or is_list(resp) ->
-        if smtp_success?(resp), do: :ok, else: {:error, {:unexpected_result, resp}}
+      # The text of the server's 250 reply to DATA, after "250 ". Every
+      # failure comes back as an error tuple, so any receipt is a success,
+      # whatever the server wrote after the code ("OK id=…", "2.6.0 …").
+      receipt when is_binary(receipt) ->
+        :ok
 
       {:error, reason} when is_atom(reason) ->
         {:error, reason}
@@ -111,11 +132,6 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
     end
   end
 
-  defp smtp_success?(resp) do
-    s = to_string(resp) |> String.trim()
-    String.match?(s, ~r/^\s*2\d\d(\s|-)/) or
-      String.starts_with?(s, ["2.0.0", "250", "251", "252"])
-  end
 
   @impl true
   def format_reason({:forwarding_failed, {:send, {:permanent_failure, host, message}}}) do
@@ -127,6 +143,14 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
     msg = to_string(message) |> String.trim()
     "451 4.0.0 Remote server #{host} temporarily failed: #{msg}"
   end
+
+  def format_reason({:forwarding_failed, {:no_more_hosts, {:permanent_failure, host, message}}}) do
+    msg = to_string(message) |> String.trim()
+    "550 5.0.0 Remote server #{host} rejected: #{msg}"
+  end
+
+  def format_reason({:forwarding_failed, {:host_unreachable, host}}),
+    do: "451 4.4.1 Remote server #{host} unreachable, will retry later"
 
   def format_reason({:forwarding_failed, reason}) do
     "451 4.4.1 SMTP forward failed: #{inspect(reason)}"

@@ -53,7 +53,8 @@ defmodule FeatherMail.MixProject do
         ],
         "🧠 Concepts": [
           "guides/concepts/adapters.md",
-          "guides/concepts/transformers.md"
+          "guides/concepts/transformers.md",
+          "guides/concepts/mail_queue.md"
         ],
         "📦 Adapters · Authentication": [
           "guides/adapters/authentication/encrypted_provisioned_password.md",
@@ -102,7 +103,12 @@ defmodule FeatherMail.MixProject do
         "🧠 Core Runtime": [
           Feather.FeatherMailServer,
           Feather.FeatherMailSupervisor,
-          Feather.Session
+          Feather.Session,
+          Feather.MailQueue,
+          Feather.MailQueue.Entry,
+          Feather.MailQueue.BucketWorker,
+          Feather.MailQueue.Supervisor,
+          Feather.Delivery
         ],
         "🧩 Adapter Behavior": [
           FeatherAdapters.Adapter

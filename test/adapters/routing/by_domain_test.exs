@@ -19,6 +19,20 @@ defmodule FeatherAdapters.Routing.ByDomainTest do
     end
   end
 
+  defmodule FailingDelivery do
+    @moduledoc false
+    @behaviour FeatherAdapters.Adapter
+
+    @impl true
+    def init_session(opts), do: Map.new(opts)
+
+    @impl true
+    def deliver(_raw, _meta, state), do: {:halt, state.reason, state}
+
+    @impl true
+    def format_reason(:busy), do: "451 4.3.0 Busy"
+  end
+
   @msg "From: a@b\r\nSubject: hi\r\n\r\nBody.\r\n"
 
   defp routes(opts \\ []) do
@@ -78,5 +92,33 @@ defmodule FeatherAdapters.Routing.ByDomainTest do
     assert [header] = Regex.scan(~r/^Authentication-Results:.*$/m, raw) |> List.flatten()
     assert header =~ "mx.example.com;"
     assert raw =~ "spf=pass smtp.mailfrom=sender@example.org"
+  end
+
+  test "reports the recipients of every failed route, and only those" do
+    routes = %{
+      "ok.test" => {CapturingDelivery, [tag: :ok]},
+      "busy.test" => {FailingDelivery, [reason: :busy]},
+      :default =>
+        {FailingDelivery,
+         [reason: {:failed_recipients, [{"x@partial.test", "550 5.1.1 Unknown user"}]}]}
+    }
+
+    meta = %{
+      from: "sender@example.org",
+      to: ["a@ok.test", "b@busy.test", "x@partial.test", "y@partial.test"]
+    }
+
+    state = ByDomain.init_session(routes: routes)
+
+    assert {:halt, {:failed_recipients, failures} = reason, _} =
+             ByDomain.deliver(@msg, meta, state)
+
+    assert Enum.sort(failures) == [
+             {"b@busy.test", "451 4.3.0 Busy"},
+             {"x@partial.test", "550 5.1.1 Unknown user"}
+           ]
+
+    assert_received {:delivered, :ok, _raw, %{to: ["a@ok.test"]}}
+    assert FeatherAdapters.Adapter.reply(ByDomain, reason) =~ ~r/\A451 4\.0\.0 /
   end
 end
