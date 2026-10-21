@@ -97,8 +97,11 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
       :ok -> :ok
       {:ok, _receipt} -> :ok
 
-      resp when is_binary(resp) or is_list(resp) ->
-        if smtp_success?(resp), do: :ok, else: {:error, {:unexpected_result, resp}}
+      # The text of the server's 250 reply to DATA, after "250 ". Every
+      # failure comes back as an error tuple, so any receipt is a success,
+      # whatever the server wrote after the code ("OK id=…", "2.6.0 …").
+      receipt when is_binary(receipt) ->
+        :ok
 
       {:error, reason} when is_atom(reason) ->
         {:error, reason}
@@ -111,11 +114,6 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
     end
   end
 
-  defp smtp_success?(resp) do
-    s = to_string(resp) |> String.trim()
-    String.match?(s, ~r/^\s*2\d\d(\s|-)/) or
-      String.starts_with?(s, ["2.0.0", "250", "251", "252"])
-  end
 
   @impl true
   def format_reason({:forwarding_failed, {:send, {:permanent_failure, host, message}}}) do

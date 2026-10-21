@@ -171,8 +171,11 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       :ok -> :ok
       {:ok, _receipt} -> :ok
 
-      resp when is_binary(resp) or is_list(resp) ->
-        if smtp_success?(resp), do: :ok, else: {:error, {:unexpected_result, resp}}
+      # The text of the server's 250 reply to DATA, after "250 ". Every
+      # failure comes back as an error tuple, so any receipt is a success,
+      # whatever the server wrote after the code ("OK id=…", "2.6.0 …").
+      receipt when is_binary(receipt) ->
+        :ok
 
       {:error, reason} when is_atom(reason) ->
         {:error, reason}
@@ -191,12 +194,6 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
     end
   end
 
-  defp smtp_success?(resp) do
-    s = to_string(resp) |> String.trim()
-    # Accept typical 2xx formats: "250 OK", "2.0.0 Accepted", etc.
-    String.match?(s, ~r/^\s*2\d\d(\s|-)/) or
-      String.starts_with?(s, ["2.0.0", "250", "251", "252"])
-  end
 
   defp lookup_mx(domain) when is_binary(domain) do
     charlist_domain = String.to_charlist(domain)
