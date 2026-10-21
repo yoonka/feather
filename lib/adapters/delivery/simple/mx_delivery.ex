@@ -15,22 +15,40 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
 
   ## Behavior
 
-  - All recipients are grouped by domain.
-  - Each domain is resolved via DNS to obtain MX records.
-  - The message is then delivered to the highest-priority MX server.
+  - All recipients are grouped by domain, and each group is delivered in
+    one transaction.
+  - Each domain is resolved as RFC 5321 §5.1 requires:
+    - its MX records are tried in order of preference, those of equal
+      preference in random order, until one accepts the message;
+    - only a domain with no MX records is delivered to its own address
+      (the "implicit MX"); a domain that has MX records is never delivered
+      to its address records, even when every MX fails;
+    - a domain that does not exist, publishes a null MX (RFC 7505) or has
+      neither MX nor address records fails permanently, while a DNS
+      lookup that fails for a temporary reason fails temporarily.
+  - A permanent rejection (5xx) from an MX ends the group's attempt; a
+    temporary one moves on to the next MX.
+  - A host that could not be reached is skipped for a while (see
+    `Feather.Utils.UnreachableHosts`).
   - If delivery fails for any domain group, the pipeline is halted with
     `{:failed_recipients, failures}`, listing only the recipients of the
     failed groups (see `FeatherAdapters.Adapter`).
 
   ## Options
 
-    - `:domain` (optional, default: `"localhost"`) — the domain used in the SMTP HELO/EHLO handshake.
+    - `:hostname` / `:domain` (optional, default: `"localhost"`) — the name
+      used in the SMTP HELO/EHLO handshake.
+    - `:tls` (optional, default: `:always`) — `:always`, `:if_available` or
+      `:never`, as for `:gen_smtp_client`.
     - `:tls_options` (optional) — passed to `:gen_smtp_client.send_blocking/2` under `:tls_options`.
       This can include:
 
         - `verify: :verify_peer`
         - `cacerts: :public_key.cacerts_get()`
         - Any other TLS options accepted by `:ssl.connect/4`
+    - `:port` (optional, default: `25`) — the port to connect to.
+    - `:unreachable_ttl` (optional, default: `300`) — seconds to skip a
+      host after it could not be reached.
 
   ## Example
 
@@ -50,35 +68,37 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       - gmail.com: ["alice@gmail.com", "charlie@gmail.com"]
       - outlook.com: ["bob@outlook.com"]
 
-  2. Perform MX lookup for each domain.
-  3. Deliver once per domain using the top-priority MX host.
+  2. Resolve the MX records of each domain.
+  3. Deliver once per domain, trying its MX hosts in order.
   4. Halt with the recipients of every group that failed to deliver.
 
   ## Errors
 
-  Each failed recipient carries the reply for its domain group: a `550`
-  when the remote server rejected the message permanently, a `451`
-  otherwise, for example:
+  Each failed recipient carries the reply for its domain group, for
+  example:
 
-      "451 4.4.1 Could not deliver to remote: :no_mx_records"
-
-  ## Notes
-
-  - This adapter uses `:gen_smtp_client.send_blocking/2` for direct delivery.
-  - Only the first (highest-priority) MX record is used; fallback logic is not yet implemented.
-  - MX records are resolved via `:inet_res.lookup/3`, and failures are logged.
+      "550 5.0.0 Remote server mx.example.org rejected: 550 5.1.1 no such user"
+      "451 4.0.0 Remote server mx.example.org temporarily failed: 451 greylisted"
+      "550 5.1.2 Domain exampel.org does not exist"
+      "451 4.4.3 DNS lookup for example.org failed: :timeout"
   """
 
 
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
   alias Feather.Logger
+  alias Feather.Utils.UnreachableHosts
 
   @impl true
   def init_session(opts) do
     %{
       hostname: Keyword.get(opts, :hostname, Keyword.get(opts, :domain, "localhost")),
+      tls: Keyword.get(opts, :tls, :always),
       tls_options: Keyword.get(opts, :tls_options, []),
+      port: Keyword.get(opts, :port, 25),
+      unreachable_ttl: Keyword.get(opts, :unreachable_ttl, 300),
+      # A test hook; see resolve/2.
+      dns: Keyword.get(opts, :dns, &dns_lookup/2),
       local_domains: Keyword.get(opts, :local_domains, [])
     }
   end
@@ -109,58 +129,61 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   end
 
   defp deliver_grouped({domain, rcpts}, from, raw, state) do
-    case lookup_mx(domain) do
-      {:ok, mx_records} ->
-        try_mx_hosts(mx_records, domain, rcpts, from, raw, state)
+    case resolve(domain, state.dns) do
+      {:ok, hosts} ->
+        case try_hosts(hosts, domain, rcpts, from, raw, state) do
+          :ok -> :ok
+          {:error, reason} -> {:error, reason, rcpts}
+        end
 
       {:error, reason} ->
-        Logger.warning("[REMOTE] MX lookup failed for #{domain}: #{inspect(reason)}")
+        Logger.warning("[REMOTE] Cannot route #{domain}: #{inspect(reason)}")
         {:error, reason, rcpts}
     end
   end
 
-  # Try each MX host in priority order; if all fail, fall back to A/AAAA
-  # per RFC 5321 §5.1
-  defp try_mx_hosts(mx_records, domain, rcpts, from, raw, state) do
-    result =
-      Enum.reduce_while(mx_records, {:error, :all_mx_failed}, fn {_priority, mx_host}, _acc ->
-        case send_smtp(mx_host, from, rcpts, raw, state) do
-          :ok -> {:halt, :ok}
-          {:error, reason} ->
-            Logger.warning("[REMOTE] MX host #{mx_host} failed for #{domain}: #{inspect(reason)}")
-            {:cont, {:error, reason}}
-        end
-      end)
+  # RFC 5321 §5.1: try each host in order until one accepts the message.
+  # A permanent rejection ends the attempt; anything else moves on to the
+  # next host. There is no fallback past the last MX: a domain with MX
+  # records MUST NOT be delivered to its address records.
+  defp try_hosts(hosts, domain, rcpts, from, raw, state) do
+    Enum.reduce_while(hosts, {:error, :no_mx_hosts}, fn host, _acc ->
+      case send_smtp(host, from, rcpts, raw, state) do
+        :ok ->
+          {:halt, :ok}
 
-    case result do
-      :ok ->
-        :ok
+        {:error, reason} ->
+          Logger.warning("[REMOTE] MX host #{host} failed for #{domain}: #{inspect(reason)}")
+          if permanent?(reason), do: {:halt, {:error, reason}}, else: {:cont, {:error, reason}}
+      end
+    end)
+  end
 
-      {:error, last_reason} ->
-        # Fall back to A/AAAA record as implicit MX
-        Logger.info("[REMOTE] All MX hosts failed for #{domain}, trying A record fallback")
+  defp permanent?({_type, {:permanent_failure, _host, _message}}), do: true
+  defp permanent?(_reason), do: false
 
-        case :inet.getaddr(String.to_charlist(domain), :inet) do
-          {:ok, _ip} ->
-            case send_smtp(domain, from, rcpts, raw, state) do
-              :ok -> :ok
-              {:error, reason} ->
-                Logger.warning("[REMOTE] A record fallback failed for #{domain}: #{inspect(reason)}")
-                {:error, reason, rcpts}
-            end
+  defp send_smtp(host, from, rcpts, raw, state) do
+    if UnreachableHosts.unreachable?(host, state.port) do
+      {:error, {:host_unreachable, host}}
+    else
+      case do_send_smtp(host, from, rcpts, raw, state) do
+        {:error, reason} = error ->
+          if UnreachableHosts.network_failure?(reason),
+            do: UnreachableHosts.mark(host, state.port, state.unreachable_ttl)
 
-          {:error, _} ->
-            Logger.warning("[REMOTE] No A record fallback for #{domain}")
-            {:error, last_reason, rcpts}
-        end
+          error
+
+        :ok ->
+          :ok
+      end
     end
   end
 
-  defp send_smtp(mx_host, from, rcpts, raw, state) do
+  defp do_send_smtp(mx_host, from, rcpts, raw, state) do
     options = [
       relay: String.to_charlist(mx_host),
-      port: 25,
-      tls: :always,
+      port: state.port,
+      tls: state.tls,
       ssl: false,
       auth: :never,
       hostname: state.hostname,
@@ -194,29 +217,84 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
     end
   end
 
+  @doc """
+  Resolves `domain` to the hosts to try, in order, as RFC 5321 §5.1
+  requires.
 
-  defp lookup_mx(domain) when is_binary(domain) do
-    charlist_domain = String.to_charlist(domain)
+  Returns `{:ok, hosts}`, or `{:error, reason}` where `reason` is one of
+  `{:nxdomain, domain}`, `{:null_mx, domain}` and `{:no_address, domain}`
+  (permanent), or `{:dns_error, domain, reason}` (temporary).
 
-    try do
-      case :inet_res.lookup(charlist_domain, :in, :mx) do
-        records when is_list(records) and records != [] ->
-          records
-          |> Enum.map(fn {priority, host} -> {priority, to_string(host)} end)
-          |> Enum.sort_by(fn {priority, _} -> priority end)
-          |> then(&{:ok, &1})
+  `dns` performs the lookups: `dns.(:mx, domain)` returns
+  `{:ok, [{preference, host}]}` or `{:error, reason}`, and
+  `dns.(:address, domain)` returns `:ok` when the domain has an A or AAAA
+  record, or `{:error, reason}`.
+  """
+  @spec resolve(String.t(), (atom(), String.t() -> term())) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def resolve(domain, dns \\ &dns_lookup/2) do
+    case dns.(:mx, domain) do
+      {:ok, []} ->
+        # No MX records: the domain itself is the implicit MX.
+        case dns.(:address, domain) do
+          :ok -> {:ok, [domain]}
+          {:error, :nxdomain} -> {:error, {:no_address, domain}}
+          {:error, reason} -> {:error, {:dns_error, domain, reason}}
+        end
 
-        [] ->
-          # RFC 5321 §5.1: fall back to A/AAAA record as implicit MX
-          case :inet.getaddr(charlist_domain, :inet) do
-            {:ok, _ip} -> {:ok, [{0, domain}]}
-            {:error, _} -> {:error, :no_mx_records}
-          end
-      end
-    rescue
-      e ->
-        Logger.error("MX lookup failed for #{domain}: #{inspect(e)}")
-        {:error, :dns_lookup_failed}
+      {:ok, records} ->
+        # RFC 7505: a single "." MX says the domain accepts no mail.
+        if Enum.any?(records, fn {_pref, host} -> host in [".", ""] end),
+          do: {:error, {:null_mx, domain}},
+          else: {:ok, order(records)}
+
+      {:error, :nxdomain} ->
+        {:error, {:nxdomain, domain}}
+
+      {:error, reason} ->
+        {:error, {:dns_error, domain, reason}}
+    end
+  end
+
+  # Lower preference first; equal preferences in random order, to spread
+  # the load across a domain's mail exchangers (RFC 5321 §5.1).
+  defp order(records) do
+    records
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.flat_map(fn {_pref, hosts} -> Enum.shuffle(hosts) end)
+  end
+
+  @doc false
+  def dns_lookup(:mx, domain) do
+    case :inet_res.resolve(String.to_charlist(domain), :in, :mx) do
+      {:ok, msg} ->
+        records =
+          for rr <- :inet_dns.msg(msg, :anlist),
+              :inet_dns.rr(rr, :type) == :mx,
+              {pref, host} = :inet_dns.rr(rr, :data),
+              do: {pref, to_string(host)}
+
+        {:ok, records}
+
+      {:error, {reason, _msg}} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def dns_lookup(:address, domain) do
+    charlist = String.to_charlist(domain)
+
+    case {:inet.getaddr(charlist, :inet), :inet.getaddr(charlist, :inet6)} do
+      {{:ok, _}, _} -> :ok
+      {_, {:ok, _}} -> :ok
+      # Only "no such name" for both is permanent; any other error is not.
+      {{:error, :nxdomain}, {:error, :nxdomain}} -> {:error, :nxdomain}
+      {{:error, :nxdomain}, {:error, reason}} -> {:error, reason}
+      {{:error, reason}, _} -> {:error, reason}
     end
   end
 
@@ -240,6 +318,26 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
     msg = to_string(message) |> String.trim()
     "451 4.0.0 Remote server #{host} temporarily failed: #{msg}"
   end
+
+  def format_reason({:remote_delivery_failed, {:no_more_hosts, {:permanent_failure, host, message}}}) do
+    msg = to_string(message) |> String.trim()
+    "550 5.0.0 Remote server #{host} rejected: #{msg}"
+  end
+
+  def format_reason({:remote_delivery_failed, {:nxdomain, domain}}),
+    do: "550 5.1.2 Domain #{domain} does not exist"
+
+  def format_reason({:remote_delivery_failed, {:null_mx, domain}}),
+    do: "550 5.1.10 Domain #{domain} accepts no mail (null MX)"
+
+  def format_reason({:remote_delivery_failed, {:no_address, domain}}),
+    do: "550 5.4.4 Domain #{domain} has neither MX nor address records"
+
+  def format_reason({:remote_delivery_failed, {:dns_error, domain, reason}}),
+    do: "451 4.4.3 DNS lookup for #{domain} failed: #{inspect(reason)}"
+
+  def format_reason({:remote_delivery_failed, {:host_unreachable, host}}),
+    do: "451 4.4.1 Remote server #{host} unreachable, will retry later"
 
   def format_reason({:remote_delivery_failed, reason}),
     do: "451 4.4.1 Could not deliver to remote: #{inspect(reason)}"
