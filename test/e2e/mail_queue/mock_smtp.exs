@@ -1,6 +1,10 @@
 # Mock receiving MTA for the mail queue end-to-end test.
 #
-#   mix run --no-start test/e2e/mail_queue/mock_smtp.exs <inbox_dir> <port> <flaky_until_s>
+#   mix run --no-start test/e2e/mail_queue/mock_smtp.exs <inbox_dir> <port> <flaky_until_s> \
+#     <lmtp_port> <lmtp_up_after_s>
+#
+# It also plays the MDA: an LMTP server on <lmtp_port> that is down until
+# <lmtp_up_after_s>, then accepts everything.
 #
 # Per recipient domain, at RCPT:
 #   ok.test     250
@@ -118,7 +122,20 @@ defmodule MockSMTP do
   def terminate(reason, state), do: {:ok, reason, state}
 end
 
-[inbox, port, flaky_until] = System.argv()
+[inbox, port, flaky_until, lmtp_port, lmtp_up_after] = System.argv()
 {:ok, _} = Application.ensure_all_started(:gen_smtp)
 MockSMTP.start(inbox, String.to_integer(port), String.to_integer(flaky_until))
+
+MockSMTP.log("MDA (LMTP :#{lmtp_port}) down until #{lmtp_up_after}s")
+Process.sleep(String.to_integer(lmtp_up_after) * 1000)
+
+{:ok, _} =
+  :gen_smtp_server.start(:mock_lmtp, MockSMTP,
+    port: String.to_integer(lmtp_port),
+    address: {127, 0, 0, 1},
+    domain: "mda.test",
+    sessionoptions: [protocol: :lmtp]
+  )
+
+MockSMTP.log("MDA (LMTP :#{lmtp_port}) up")
 Process.sleep(:infinity)

@@ -10,15 +10,18 @@
 # The mock (mock_smtp.exs) answers per recipient domain:
 #   ok.test 250 | perm.test 550 | flaky.test 451 until t=90s, then 250 |
 #   dead.test 451 | slow.test 250 after 15s
-# It is also the MX of sender.test, so it receives the DSNs.
+# It is also the MX of sender.test, so it receives the DSNs, and the MDA:
+# an LMTP server on :2601 for mda.test, down until t=70s.
 #
 # Timeline:
-#   t=0   A1 ok+perm+flaky, A2 dead, A3 dead from <>   -> bucket A, DSN for perm
+#   t=0   A1 ok+perm+flaky, A2 dead, A3 dead from <>,
+#         M1 to the MDA (down)                          -> bucket A, DSN for perm
 #   t=15  B1 flaky                                     -> joins bucket A
 #   t=45  C1 flaky                                     -> opens bucket C
 #   t=50  S1 slow: first attempt still running at...
 #   t=60  kill -9 Feather, restart                     -> S1 recovered from incoming/,
 #                                                         buckets resumed
+#   t=70  the MDA comes up                             -> M1 delivered at the next retry
 #   t=90  flaky.test starts accepting                  -> next retries deliver
 #   t~185 bucket A reaches max_age                     -> DSN for dave, folder deleted
 #
@@ -75,6 +78,7 @@ end
      "flaky.test" => forward.("flaky"),
      "dead.test" => forward.("dead"),
      "slow.test" => forward.("slow"),
+     "mda.test" => {FeatherAdapters.Delivery.LMTPDelivery, host: "127.0.0.1", port: 2601},
      :default => forward.("default")
    }}
 ]
@@ -112,13 +116,13 @@ start_feather() {
 
 until_t() { while [ $(( $(date +%s) - START )) -lt "$1" ]; do sleep 1; done; }
 
-cleanup() { for p in $(pid_on 2525) $(pid_on 2600); do kill -9 "$p" 2>/dev/null; done; }
+cleanup() { for p in $(pid_on 2525) $(pid_on 2600) $(pid_on 2601); do kill -9 "$p" 2>/dev/null; done; }
 trap cleanup EXIT
 
-if [ -n "$(pid_on 2525)$(pid_on 2600)" ]; then echo "ports 2525/2600 are in use"; exit 1; fi
+if [ -n "$(pid_on 2525)$(pid_on 2600)$(pid_on 2601)" ]; then echo "ports 2525/2600/2601 are in use"; exit 1; fi
 (cd "$APP" && mix compile >/dev/null)
 
-(cd "$APP" && mix run --no-start "$HERE/mock_smtp.exs" "$W/inbox" 2600 90 > "$OUT/mock.log" 2>&1 &)
+(cd "$APP" && mix run --no-start "$HERE/mock_smtp.exs" "$W/inbox" 2600 90 2601 70 > "$OUT/mock.log" 2>&1 &)
 wait_port 2600
 note "mock up"
 start_feather
@@ -127,6 +131,7 @@ note "== A: three messages, one bucket =="
 send A1-partial alice@sender.test ok@ok.test,bob@perm.test,carol@flaky.test
 send A2-dead alice@sender.test dave@dead.test
 send A3-nullsender "" zed@dead.test
+send M1-mda-down alice@sender.test user@mda.test
 until_t 8; snapshot "after A"
 
 until_t 15
@@ -174,6 +179,8 @@ check "carol@flaky.test delivered exactly once"         '[ "$(delivered carol@fl
 check "erin@flaky.test delivered exactly once"          '[ "$(delivered erin@flaky.test)" = 1 ]'
 check "frank@flaky.test delivered exactly once"         '[ "$(delivered frank@flaky.test)" = 1 ]'
 check "slow@slow.test delivered exactly once"           '[ "$(delivered slow@slow.test)" = 1 ]'
+check "MDA down at submit: queued, delivered once up"   '[ "$(delivered "user\+INBOX@mda.test")" = 1 ] && grep -q "Remote server 127.0.0.1 unavailable" "$OUT/feather.log"'
+check "MDA down at submit: no DSN for it"               '[ -z "$(dsn_for user@mda.test)" ]'
 check "bob@perm.test, dave and zed never delivered"     '[ "$(delivered "(bob|dave|zed)@")" = 0 ]'
 check "two DSNs, both to alice@sender.test from <>"     '[ "$(dsns | wc -l | tr -d " ")" = 2 ] && ! grep -L "^X-Mock-Envelope-To: alice@sender.test" $(dsns) | grep -q .'
 check "bob: bounced at once, remote status 5.1.1"       'dsn_has bob@perm.test "Status: 5.1.1"'

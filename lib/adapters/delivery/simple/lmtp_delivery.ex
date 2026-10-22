@@ -69,8 +69,15 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
 
   ## Errors
 
-  If delivery fails at any step, the pipeline halts and the reason is logged and returned
-  as `{:halt, :delivery_failed, state}`.
+  If delivery fails at any step, the pipeline halts with
+  `{:lmtp_failed, server, reason}`, where `reason` is the LMTP server's
+  reply or the connection error. It formats as:
+
+    - a `550` when the server rejected the message permanently (`5xx`);
+    - a `451` when it failed temporarily (`4xx`), or could not be reached
+      at all (refused, timed out, socket missing), so the message is
+      queued and retried when a mail queue is configured (see
+      `Feather.Delivery`) instead of bounced.
 
   ## Notes
 
@@ -83,6 +90,7 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   @recipient_delimiter "+"
 
   alias Feather.Logger
+  alias FeatherAdapters.Delivery.Remote
   use FeatherAdapters.Transformers.Transformable
 
   @impl true
@@ -122,7 +130,7 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
 
       {:error, reason} ->
         Logger.error("LMTP delivery failed: #{inspect(reason)}")
-        {:halt, :delivery_failed, state}
+        {:halt, {:lmtp_failed, server(state), reason}, state}
     end
   end
 
@@ -130,14 +138,29 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
   def terminate(_reason, _meta, _state), do: :ok
 
   @impl true
-  def format_reason(reason), do: inspect(reason)
+  def format_reason({:lmtp_failed, server, reply}) when is_binary(reply),
+    do: Remote.from_reply(server, reply)
+
+  # Refused, timed out, closed, socket missing: the MDA is down for now.
+  def format_reason({:lmtp_failed, server, reason}), do: Remote.unavailable(server, reason)
+
+  def format_reason(reason), do: Remote.format_error(reason)
+
+  defp server(%{mode: :unix, path: path}), do: path
+  defp server(%{host: host}), do: host
 
   defp deliver_lmtp(from, rcpts, raw, state, opts) do
     mailbox = Keyword.get(opts, :mailbox, "INBOX")
 
+    with {:ok, socket} <- connect(state) do
+      result = transaction(socket, from, rcpts, raw, mailbox)
+      close_socket(socket, state)
+      result
+    end
+  end
 
-    with {:ok, socket} <- connect(state),
-         :ok <- read_lmtp_ok(socket),
+  defp transaction(socket, from, rcpts, raw, mailbox) do
+    with :ok <- read_lmtp_ok(socket),
          :ok <- send_cmd(socket, "LHLO feathermail.local"),
          :ok <- send_cmd(socket, "MAIL FROM:<#{from}>"),
          :ok <- Enum.reduce_while(rcpts, :ok, fn rcpt, _acc ->
@@ -148,12 +171,9 @@ defmodule FeatherAdapters.Delivery.LMTPDelivery do
          end),
          :ok <- send_cmd(socket, "DATA"),
          :ok <- socket_send(socket, raw <> "\r\n.\r\n"),
-         :ok <- read_lmtp_ok(socket),
-         :ok <- send_cmd(socket, "QUIT") do
-      close_socket(socket, state)
+         :ok <- read_lmtp_ok(socket) do
+      _ = send_cmd(socket, "QUIT")
       :ok
-    else
-      error -> error
     end
   end
 

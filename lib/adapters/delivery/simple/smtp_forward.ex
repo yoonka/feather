@@ -59,7 +59,7 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
 
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
-  alias Feather.Utils.UnreachableHosts
+  alias FeatherAdapters.Delivery.Remote
   require Logger
 
   @impl true
@@ -77,30 +77,6 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
 
   @impl true
   def deliver(raw, %{from: from, to: rcpts} = meta, %{opts: opts} = state) do
-    server = Keyword.fetch!(opts, :server)
-
-    # A server that could not be reached is skipped for a while, so every
-    # queued message does not wait out its own connection timeout.
-    result =
-      if UnreachableHosts.unreachable?(server, opts[:port]) do
-        {:error, {:host_unreachable, server}}
-      else
-        deliver_smtp(from, rcpts, raw, opts)
-      end
-
-    case result do
-      :ok ->
-        {:ok, meta, state}
-
-      {:error, reason} ->
-        if UnreachableHosts.network_failure?(reason),
-          do: UnreachableHosts.mark(server, opts[:port], opts[:unreachable_ttl] || 300)
-
-        {:halt, {:forwarding_failed, reason}, state}
-    end
-  end
-
-  defp deliver_smtp(from, rcpts, raw, opts) do
     options = [
       relay: to_charlist(Keyword.fetch!(opts, :server)),
       port: opts[:port],
@@ -111,48 +87,12 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
       tls_options: opts[:tls_options]
     ]
 
-    case :gen_smtp_client.send_blocking({from, rcpts, raw}, options) do
-      :ok -> :ok
-      {:ok, _receipt} -> :ok
-
-      # The text of the server's 250 reply to DATA, after "250 ". Every
-      # failure comes back as an error tuple, so any receipt is a success,
-      # whatever the server wrote after the code ("OK id=…", "2.6.0 …").
-      receipt when is_binary(receipt) ->
-        :ok
-
-      {:error, reason} when is_atom(reason) ->
-        {:error, reason}
-
-      {:error, type, message} ->
-        {:error, {type, message}}
-
-      other ->
-        {:error, {:unexpected_result, other}}
+    case Remote.send({from, rcpts, raw}, options, unreachable_ttl: opts[:unreachable_ttl] || 300) do
+      :ok -> {:ok, meta, state}
+      {:error, reason} -> {:halt, {:forwarding_failed, reason}, state}
     end
   end
 
-
   @impl true
-  def format_reason({:forwarding_failed, {:send, {:permanent_failure, host, message}}}) do
-    msg = to_string(message) |> String.trim()
-    "550 5.0.0 Remote server #{host} rejected: #{msg}"
-  end
-
-  def format_reason({:forwarding_failed, {:send, {:temporary_failure, host, message}}}) do
-    msg = to_string(message) |> String.trim()
-    "451 4.0.0 Remote server #{host} temporarily failed: #{msg}"
-  end
-
-  def format_reason({:forwarding_failed, {:no_more_hosts, {:permanent_failure, host, message}}}) do
-    msg = to_string(message) |> String.trim()
-    "550 5.0.0 Remote server #{host} rejected: #{msg}"
-  end
-
-  def format_reason({:forwarding_failed, {:host_unreachable, host}}),
-    do: "451 4.4.1 Remote server #{host} unreachable, will retry later"
-
-  def format_reason({:forwarding_failed, reason}) do
-    "451 4.4.1 SMTP forward failed: #{inspect(reason)}"
-  end
+  def format_reason({:forwarding_failed, reason}), do: Remote.format_error(reason)
 end
