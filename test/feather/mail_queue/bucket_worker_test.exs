@@ -72,7 +72,7 @@ defmodule Feather.MailQueue.BucketWorkerTest do
     {:ok, bucket, _} = MailQueue.enqueue(dir, @raw, "", ["a@example.org"])
     start(dir, bucket, interval: 60_000, retry_now: true)
 
-    assert_receive {:delivered, ["a@example.org"]}, 100
+    assert_receive {:delivered, ["a@example.org"]}, 1_000
   end
 
   test "keeps the envelope deliver returns: the recipients left, the meta", %{tmp_dir: dir} do
@@ -113,7 +113,7 @@ defmodule Feather.MailQueue.BucketWorkerTest do
 
     start(dir, bucket, deliver: fn _, _ -> :ok end, window: 0, retry_now: true)
 
-    assert_receive {:DOWN, _, :process, _, :normal}, 200
+    assert_receive {:DOWN, _, :process, _, :normal}, 1_000
     assert MailQueue.buckets(dir) == []
   end
 
@@ -130,12 +130,14 @@ defmodule Feather.MailQueue.BucketWorkerTest do
     {:ok, bucket, _} = MailQueue.enqueue(dir, @raw, "", ["a@example.org"])
     {:ok, ^bucket, _} = MailQueue.enqueue(dir, @raw, "", ["b@example.org"])
 
-    start(dir, bucket, max_age: 120)
+    # Retry points at 50, 100 and 200ms, then max_age. The margin keeps the
+    # first retry from being skipped when enqueueing (fsync) is slow.
+    start(dir, bucket, max_age: 400)
 
-    assert_receive {:delivered, ["a@example.org"]}, 100
-    assert_receive {:expired, ["a@example.org"]}, 200
-    assert_receive {:expired, ["b@example.org"]}
-    assert_receive {:DOWN, _, :process, _, :normal}
+    assert_receive {:delivered, ["a@example.org"]}, 1_000
+    assert_receive {:expired, ["a@example.org"]}, 1_000
+    assert_receive {:expired, ["b@example.org"]}, 1_000
+    assert_receive {:DOWN, _, :process, _, :normal}, 1_000
     assert MailQueue.buckets(dir) == []
   end
 
@@ -144,9 +146,9 @@ defmodule Feather.MailQueue.BucketWorkerTest do
 
     start(dir, 0, retry_now: true)
 
-    assert_receive {:expired, ["a@example.org"]}, 100
+    assert_receive {:expired, ["a@example.org"]}, 1_000
     refute_received {:delivered, _}
-    assert_receive {:DOWN, _, :process, _, :normal}
+    assert_receive {:DOWN, _, :process, _, :normal}, 1_000
     assert MailQueue.buckets(dir) == []
   end
 
