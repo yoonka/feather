@@ -87,7 +87,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
   alias Feather.Logger
-  alias Feather.Utils.UnreachableHosts
+  alias FeatherAdapters.Delivery.Remote
 
   @impl true
   def init_session(opts) do
@@ -154,34 +154,16 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
 
         {:error, reason} ->
           Logger.warning("[REMOTE] MX host #{host} failed for #{domain}: #{inspect(reason)}")
-          if permanent?(reason), do: {:halt, {:error, reason}}, else: {:cont, {:error, reason}}
+          if Remote.permanent?(reason),
+            do: {:halt, {:error, reason}},
+            else: {:cont, {:error, reason}}
       end
     end)
   end
 
-  defp permanent?({_type, {:permanent_failure, _host, _message}}), do: true
-  defp permanent?(_reason), do: false
-
   defp send_smtp(host, from, rcpts, raw, state) do
-    if UnreachableHosts.unreachable?(host, state.port) do
-      {:error, {:host_unreachable, host}}
-    else
-      case do_send_smtp(host, from, rcpts, raw, state) do
-        {:error, reason} = error ->
-          if UnreachableHosts.network_failure?(reason),
-            do: UnreachableHosts.mark(host, state.port, state.unreachable_ttl)
-
-          error
-
-        :ok ->
-          :ok
-      end
-    end
-  end
-
-  defp do_send_smtp(mx_host, from, rcpts, raw, state) do
     options = [
-      relay: String.to_charlist(mx_host),
+      relay: String.to_charlist(host),
       port: state.port,
       tls: state.tls,
       ssl: false,
@@ -190,31 +172,7 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       tls_options: state.tls_options
     ]
 
-    case :gen_smtp_client.send_blocking({from, rcpts, raw}, options) do
-      :ok -> :ok
-      {:ok, _receipt} -> :ok
-
-      # The text of the server's 250 reply to DATA, after "250 ". Every
-      # failure comes back as an error tuple, so any receipt is a success,
-      # whatever the server wrote after the code ("OK id=…", "2.6.0 …").
-      receipt when is_binary(receipt) ->
-        :ok
-
-      {:error, reason} when is_atom(reason) ->
-        {:error, reason}
-
-      {:error, type, message} ->
-        {:error, {type, message}}
-
-      {:error, {:invalid_option, opt}} ->
-        {:error, {:invalid_option, opt}}
-
-      {:error, {:missing_required_option, opt}} ->
-        {:error, {:missing_required_option, opt}}
-
-      other ->
-        {:error, {:unexpected_result, other}}
-    end
+    Remote.send({from, rcpts, raw}, options, unreachable_ttl: state.unreachable_ttl)
   end
 
   @doc """
@@ -309,21 +267,6 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   def format_reason({:failed_recipients, failures}),
     do: FeatherAdapters.Adapter.format_failures(failures)
 
-  def format_reason({:remote_delivery_failed, {:send, {:permanent_failure, host, message}}}) do
-    msg = to_string(message) |> String.trim()
-    "550 5.0.0 Remote server #{host} rejected: #{msg}"
-  end
-
-  def format_reason({:remote_delivery_failed, {:send, {:temporary_failure, host, message}}}) do
-    msg = to_string(message) |> String.trim()
-    "451 4.0.0 Remote server #{host} temporarily failed: #{msg}"
-  end
-
-  def format_reason({:remote_delivery_failed, {:no_more_hosts, {:permanent_failure, host, message}}}) do
-    msg = to_string(message) |> String.trim()
-    "550 5.0.0 Remote server #{host} rejected: #{msg}"
-  end
-
   def format_reason({:remote_delivery_failed, {:nxdomain, domain}}),
     do: "550 5.1.2 Domain #{domain} does not exist"
 
@@ -336,9 +279,5 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
   def format_reason({:remote_delivery_failed, {:dns_error, domain, reason}}),
     do: "451 4.4.3 DNS lookup for #{domain} failed: #{inspect(reason)}"
 
-  def format_reason({:remote_delivery_failed, {:host_unreachable, host}}),
-    do: "451 4.4.1 Remote server #{host} unreachable, will retry later"
-
-  def format_reason({:remote_delivery_failed, reason}),
-    do: "451 4.4.1 Could not deliver to remote: #{inspect(reason)}"
+  def format_reason({:remote_delivery_failed, reason}), do: Remote.format_error(reason)
 end

@@ -91,6 +91,7 @@ defmodule Feather.Delivery do
   alias Feather.MailQueue
   alias Feather.MailQueue.Entry
   alias FeatherAdapters.Adapter
+  alias FeatherAdapters.Delivery.Remote
 
   @default_window :timer.minutes(15)
   @default_max_age :timer.hours(5 * 24)
@@ -374,8 +375,8 @@ defmodule Feather.Delivery do
       recipient: rcpt,
       status: status(reply),
       reason: reply,
-      diagnostic: remote_reply(reply),
-      remote_mta: remote_mta(reply),
+      diagnostic: Remote.remote_reply(reply),
+      remote_mta: Remote.remote_mta(reply),
       last_attempt: at && DateTime.from_unix!(at, :millisecond)
     }
   end
@@ -385,7 +386,7 @@ defmodule Feather.Delivery do
   # server's reply when there is one, else that of the reply itself, else
   # the class of its basic code.
   def status(reply) do
-    enhanced(remote_reply(reply) || "") || enhanced(reply) ||
+    enhanced(Remote.remote_reply(reply) || "") || enhanced(reply) ||
       if(String.starts_with?(reply, "4"), do: "4.0.0", else: "5.0.0")
   end
 
@@ -398,21 +399,6 @@ defmodule Feather.Delivery do
     end
   end
 
-  # The remote server's own reply, quoted by MXDelivery and SMTPForward
-  # after "rejected:" or "failed:".
-  defp remote_reply(reply) do
-    case Regex.run(~r/(?:rejected|failed):\s*(\d{3}\b.*)\z/s, reply) do
-      [_, remote] -> String.trim(remote)
-      nil -> nil
-    end
-  end
-
-  defp remote_mta(reply) do
-    case Regex.run(~r/Remote server (\S+) (?:rejected|temporarily failed)/, reply) do
-      [_, host] -> host
-      nil -> nil
-    end
-  end
 
   # ---- DSNs ----------------------------------------------------------------
 
