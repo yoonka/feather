@@ -90,7 +90,12 @@ defmodule Feather.Session do
       {:ok, %{meta: meta} = updated_state} ->
         final_extensions = Map.get(meta, :extensions, smtp_extensions)
         clean_meta = Map.delete(meta, :extensions)
-        {:ok, final_extensions ++ extensions, %{updated_state | meta: clean_meta}}
+
+        # gen_smtp passes its built-in SIZE, 8BITMIME and PIPELINING; ours
+        # carry the configured values, so each keyword is advertised once.
+        # An accepted EHLO resets the transaction in gen_smtp (RFC 5321 §4.1.4).
+        {:ok, merge_extensions(final_extensions, extensions),
+         %{updated_state | meta: clean_meta, mail_from?: false}}
 
       {:error, reason, failed_state} ->
         {:error, reason, failed_state}
@@ -104,7 +109,12 @@ defmodule Feather.Session do
   @impl true
   def handle_HELO(domain, state) do
     state = %{state | meta: Map.put(state.meta, :helo, domain)} |> Map.put(:esmtp?, false)
-    step(:helo, domain, state)
+
+    # An accepted HELO resets the transaction in gen_smtp (RFC 5321 §4.1.4).
+    case step(:helo, domain, state) do
+      {:ok, new_state} -> {:ok, %{new_state | mail_from?: false}}
+      error -> error
+    end
   end
 
   def handle_AUTH(type, username, password, {:ok, state}) do
@@ -395,6 +405,13 @@ defmodule Feather.Session do
 
   # Build the AUTH mechanism list from the configured pipeline. PLAIN/LOGIN
   # are advertised when any adapter implements `auth/3`.
+  defp merge_extensions(ours, builtin) do
+    keywords = MapSet.new(ours, &extension_keyword/1)
+    ours ++ Enum.reject(builtin, &MapSet.member?(keywords, extension_keyword(&1)))
+  end
+
+  defp extension_keyword({keyword, _value}), do: keyword |> to_string() |> String.upcase()
+
   defp auth_mechanisms(%{pipeline: pipeline}) do
     has_password? = Enum.any?(pipeline, fn {mod, _} -> function_exported?(mod, :auth, 3) end)
     if has_password?, do: "PLAIN LOGIN", else: ""

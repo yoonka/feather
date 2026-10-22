@@ -85,6 +85,37 @@ defmodule Feather.SessionTest do
       assert {:error, reply, _state} = Session.handle_RCPT("rcpt@mta.test", state)
       assert reply =~ "503"
     end
+
+    test "a new EHLO clears the MAIL FROM marker (RFC 5321 §4.1.4)" do
+      {:ok, state} = Session.handle_MAIL("sender@mta.test", new_state())
+      {:ok, _exts, state} = Session.handle_EHLO("second.test", [], state)
+
+      refute state.mail_from?
+      assert {:error, reply, _state} = Session.handle_RCPT("rcpt@mta.test", state)
+      assert reply =~ "503"
+    end
+
+    test "a new HELO clears the MAIL FROM marker (RFC 5321 §4.1.4)" do
+      {:ok, state} = Session.handle_MAIL("sender@mta.test", new_state())
+      {:ok, state} = Session.handle_HELO("second.test", state)
+
+      refute state.mail_from?
+      assert {:error, reply, _state} = Session.handle_RCPT("rcpt@mta.test", state)
+      assert reply =~ "503"
+    end
+  end
+
+  describe "EHLO extensions" do
+    test "each keyword is advertised once, with Feather's value" do
+      builtin = [{~c"SIZE", ~c"10485760"}, {~c"8BITMIME", true}, {~c"PIPELINING", true}]
+
+      {:ok, exts, _state} =
+        Session.handle_EHLO("client.test", builtin, new_state(%{opts: %{max_size: 1024}}))
+
+      keywords = Enum.map(exts, fn {k, _} -> to_string(k) end)
+      assert keywords == Enum.uniq(keywords)
+      assert {~c"SIZE", ~c"1024"} in exts
+    end
   end
 
   defmodule CaptureData do
