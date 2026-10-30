@@ -1,5 +1,5 @@
 defmodule FeatherAdapters.Delivery.SMTPForward do
- @moduledoc """
+  @moduledoc """
   Forwards incoming messages to an external SMTP server.
 
   This adapter is useful when FeatherMail is acting as a relay or edge processor
@@ -48,11 +48,15 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
 
   ## Errors
 
-  If delivery fails, the adapter halts the pipeline and returns a `451 4.4.1` error with the failure reason.
+  If the server refuses some recipients, the message is still sent to the
+  ones it accepted, and only the refused ones fail, each with the server's
+  reply: a `5xx` is reported to the sender, a `4xx` is retried. If the
+  whole delivery fails (server unreachable, sender or message refused),
+  every recipient fails with the same reply.
 
   ## Notes
 
-  - Uses `:gen_smtp_client.send/2` for delivery.
+  - Uses `FeatherAdapters.Delivery.Remote.send/3` for delivery.
   - Performs basic deduplication and auth detection (AUTH is `:always` if both `:username` and `:password` are provided).
 
   """
@@ -88,11 +92,22 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
     ]
 
     case Remote.send({from, rcpts, raw}, options, unreachable_ttl: opts[:unreachable_ttl] || 300) do
-      :ok -> {:ok, meta, state}
-      {:error, reason} -> {:halt, {:forwarding_failed, reason}, state}
+      :ok ->
+        {:ok, meta, state}
+
+      {:error, reason} ->
+        {:halt, {:forwarding_failed, reason}, state}
+
+      # The server refused some recipients: the others got the message.
+      {:failed_recipients, failures} ->
+        replies = Enum.map(failures, fn {rcpt, reason} -> {rcpt, Remote.format_error(reason)} end)
+        {:halt, {:failed_recipients, replies}, state}
     end
   end
 
   @impl true
+  def format_reason({:failed_recipients, failures}),
+    do: FeatherAdapters.Adapter.format_failures(failures)
+
   def format_reason({:forwarding_failed, reason}), do: Remote.format_error(reason)
 end
