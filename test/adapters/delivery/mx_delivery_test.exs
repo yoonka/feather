@@ -25,10 +25,12 @@ defmodule FeatherAdapters.Delivery.MXDeliveryTest do
 
     @impl true
     def handle_RCPT("bad@" <> _, state), do: {:error, "550 5.1.1 no such user", state}
+
     def handle_RCPT("later@" <> _, test) do
       send(test, :greylisted)
       {:error, "451 4.7.1 greylisted", test}
     end
+
     def handle_RCPT(_to, state), do: {:ok, state}
 
     @impl true
@@ -185,8 +187,10 @@ defmodule FeatherAdapters.Delivery.MXDeliveryTest do
 
       replies = replies(result)
 
-      # ok.test is one transaction, so bad@ok.test fails it for a@ok.test too.
-      assert replies["a@ok.test"] =~ ~r/\A550 5\.0\.0 /
+      # ok.test is one transaction: bad@ok.test is refused, a@ok.test is
+      # still delivered.
+      refute Map.has_key?(replies, "a@ok.test")
+      assert_received {:received, "a@sender.test", ["a@ok.test"]}
       assert replies["bad@ok.test"] =~ ~r/\A550 5\.0\.0 /
       assert replies["x@nope.test"] =~ ~r/\A550 5\.1\.2 /
       assert replies["y@null.test"] =~ ~r/\A550 5\.1\.10 /
@@ -206,6 +210,25 @@ defmodule FeatherAdapters.Delivery.MXDeliveryTest do
       assert_received :greylisted
       assert_received :greylisted
       refute_received {:dns, :address, _}
+    end
+
+    test "only the recipients a host refused temporarily move on to the next MX" do
+      port = start_receiver()
+      dns = dns(%{"ok.test" => {:ok, [{10, "localhost"}, {20, "127.0.0.1"}]}})
+
+      replies =
+        replies(deliver(["a@ok.test", "bad@ok.test", "later@ok.test"], dns: dns, port: port))
+
+      assert Map.keys(replies) |> Enum.sort() == ["bad@ok.test", "later@ok.test"]
+      assert replies["bad@ok.test"] =~ ~r/\A550 /
+      assert replies["later@ok.test"] =~ ~r/\A451 /
+
+      # The first MX delivered to a@ok.test; the second was offered
+      # later@ok.test alone.
+      assert_received {:received, "a@sender.test", ["a@ok.test"]}
+      assert_received :greylisted
+      assert_received :greylisted
+      refute_received {:received, _, _}
     end
 
     test "a host that cannot be reached is skipped until its TTL runs out" do

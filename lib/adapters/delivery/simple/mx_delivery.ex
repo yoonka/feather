@@ -83,7 +83,6 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       "451 4.4.3 DNS lookup for example.org failed: :timeout"
   """
 
-
   @behaviour FeatherAdapters.Adapter
   use FeatherAdapters.Transformers.Transformable
   alias Feather.Logger
@@ -110,17 +109,11 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
       |> Enum.group_by(&domain_of/1)
       |> Enum.map(&deliver_grouped(&1, from, raw, state))
 
-    # Each domain fails on its own: report the recipients of the failed
-    # domains, each with its reply, so the delivered ones are not retried.
+    # Each recipient fails on its own: report the failed ones, each with
+    # its reply, so the delivered ones are not retried.
     failures =
-      Enum.flat_map(results, fn
-        {:error, reason, rcpts} ->
-          reply = format_reason({:remote_delivery_failed, reason})
-          Enum.map(rcpts, &{&1, reply})
-
-        _ ->
-          []
-      end)
+      for {rcpt, reason} <- List.flatten(results),
+          do: {rcpt, format_reason({:remote_delivery_failed, reason})}
 
     case failures do
       [] -> {:ok, meta, state}
@@ -128,37 +121,51 @@ defmodule FeatherAdapters.Delivery.MXDelivery do
     end
   end
 
+  # The domain's failed recipients, each with its reason.
   defp deliver_grouped({domain, rcpts}, from, raw, state) do
     case resolve(domain, state.dns) do
       {:ok, hosts} ->
-        case try_hosts(hosts, domain, rcpts, from, raw, state) do
-          :ok -> :ok
-          {:error, reason} -> {:error, reason, rcpts}
-        end
+        try_hosts(hosts, domain, rcpts, from, raw, state)
 
       {:error, reason} ->
         Logger.warning("[REMOTE] Cannot route #{domain}: #{inspect(reason)}")
-        {:error, reason, rcpts}
+        Enum.map(rcpts, &{&1, reason})
     end
   end
 
-  # RFC 5321 §5.1: try each host in order until one accepts the message.
-  # A permanent rejection ends the attempt; anything else moves on to the
-  # next host. There is no fallback past the last MX: a domain with MX
-  # records MUST NOT be delivered to its address records.
+  # RFC 5321 §5.1: try each host in order until the message is delivered.
+  # A recipient rejected permanently is done with; one that failed for
+  # anything else moves on to the next host. There is no fallback past the
+  # last MX: a domain with MX records MUST NOT be delivered to its address
+  # records.
   defp try_hosts(hosts, domain, rcpts, from, raw, state) do
-    Enum.reduce_while(hosts, {:error, :no_mx_hosts}, fn host, _acc ->
-      case send_smtp(host, from, rcpts, raw, state) do
-        :ok ->
-          {:halt, :ok}
+    pending = Enum.map(rcpts, &{&1, :no_mx_hosts})
 
-        {:error, reason} ->
-          Logger.warning("[REMOTE] MX host #{host} failed for #{domain}: #{inspect(reason)}")
-          if Remote.permanent?(reason),
-            do: {:halt, {:error, reason}},
-            else: {:cont, {:error, reason}}
-      end
-    end)
+    {rejected, pending} =
+      Enum.reduce_while(hosts, {[], pending}, fn host, {rejected, pending} ->
+        pending_rcpts = Enum.map(pending, &elem(&1, 0))
+
+        failures =
+          case send_smtp(host, from, pending_rcpts, raw, state) do
+            :ok -> []
+            {:error, reason} -> Enum.map(pending_rcpts, &{&1, reason})
+            {:failed_recipients, failures} -> failures
+          end
+
+        for {rcpt, reason} <- failures,
+            do:
+              Logger.warning(
+                "[REMOTE] MX host #{host} failed #{rcpt} for #{domain}: #{inspect(reason)}"
+              )
+
+        {permanent, temporary} = Enum.split_with(failures, fn {_, r} -> Remote.permanent?(r) end)
+
+        if temporary == [],
+          do: {:halt, {rejected ++ permanent, []}},
+          else: {:cont, {rejected ++ permanent, temporary}}
+      end)
+
+    rejected ++ pending
   end
 
   defp send_smtp(host, from, rcpts, raw, state) do

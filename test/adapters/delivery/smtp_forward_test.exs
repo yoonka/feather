@@ -34,8 +34,8 @@ defmodule FeatherAdapters.Delivery.SMTPForwardTest do
     def handle_RCPT_extension(_ext, _state), do: :error
 
     @impl true
-    def handle_DATA(_from, to, _data, test) do
-      send(test, {:received, to})
+    def handle_DATA(_from, to, data, test) do
+      send(test, {:received, to, data})
       {:ok, "OK id=1qXyZ-0004Ab-Cd", test}
     end
 
@@ -85,7 +85,7 @@ defmodule FeatherAdapters.Delivery.SMTPForwardTest do
 
   test "any 250 reply to DATA is a success, whatever its text", %{state: state} do
     assert {:ok, _meta, _state} = deliver(["ok@ok.test"], state)
-    assert_received {:received, ["ok@ok.test"]}
+    assert_received {:received, ["ok@ok.test"], _data}
   end
 
   test "a 5xx rejection is a permanent failure", %{state: state} do
@@ -96,5 +96,36 @@ defmodule FeatherAdapters.Delivery.SMTPForwardTest do
   test "a 4xx rejection is a temporary failure", %{state: state} do
     assert {:halt, reason, _state} = deliver(["later@ok.test"], state)
     assert SMTPForward.format_reason(reason) =~ ~r/\A451 /
+  end
+
+  describe "with recipients the server refuses" do
+    defp replies({:halt, {:failed_recipients, failures}, _state}), do: Map.new(failures)
+
+    test "the message still goes to the accepted ones", %{state: state} do
+      replies = replies(deliver(["ok@ok.test", "bad@ok.test", "later@ok.test"], state))
+
+      assert_received {:received, ["ok@ok.test"], _data}
+      assert Map.keys(replies) |> Enum.sort() == ["bad@ok.test", "later@ok.test"]
+      assert replies["bad@ok.test"] =~ ~r/\A550 .*550 5\.1\.1 no such user/
+      assert replies["later@ok.test"] =~ ~r/\A451 .*451 4\.7\.1 greylisted/
+    end
+
+    test "no DATA is sent when every recipient is refused", %{state: state} do
+      replies = replies(deliver(["bad@ok.test", "later@ok.test"], state))
+
+      refute_received {:received, _, _}
+      assert replies["bad@ok.test"] =~ ~r/\A550 /
+      assert replies["later@ok.test"] =~ ~r/\A451 /
+    end
+  end
+
+  test "lines starting with a dot arrive unchanged", %{state: state} do
+    raw = "Subject: dots\r\n\r\n.\r\n..two\r\nend\r\n"
+
+    assert {:ok, _meta, _state} =
+             SMTPForward.deliver(raw, %{from: "a@sender.test", to: ["ok@ok.test"]}, state)
+
+    assert_received {:received, ["ok@ok.test"], data}
+    assert data =~ "\r\n.\r\n..two\r\nend"
   end
 end
