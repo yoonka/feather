@@ -68,11 +68,26 @@ defmodule Feather.SessionTest do
 
     test "RSET clears the MAIL FROM marker so a following RCPT is rejected" do
       {:ok, state} = Session.handle_MAIL("sender@mta.test", new_state())
-      {:ok, state} = Session.handle_RSET(state)
+      state = Session.handle_RSET(state)
 
       refute state.mail_from?
       assert {:error, reply, _state} = Session.handle_RCPT("rcpt@mta.test", state)
       assert reply =~ "503"
+    end
+
+    # gen_smtp stores what handle_RSET/1 and handle_STARTTLS/1 return as the
+    # callback state as is. A wrapped {:ok, state} made the next callback
+    # crash the session, e.g. on the command after a second RSET.
+    test "RSET and STARTTLS return the bare state, so repeated calls keep working" do
+      {:ok, state} = Session.handle_MAIL("sender@mta.test", new_state())
+
+      state = state |> Session.handle_RSET() |> Session.handle_RSET()
+      assert %{mail_from?: false} = state
+
+      state = Session.handle_STARTTLS(state)
+      assert %{tls_active: true} = state
+
+      assert {:ok, %{mail_from?: true}} = Session.handle_MAIL("sender@mta.test", state)
     end
 
     test "marker is cleared after DATA so a new transaction must re-issue MAIL" do
