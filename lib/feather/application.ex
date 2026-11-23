@@ -9,7 +9,9 @@ alias Feather.PipelineManager
 
   @impl true
   def start(_type, _args) do
-
+    # Before any SMTP session exists: a session crash report must not print
+    # adapter secrets or client credentials.
+    :ok = Feather.LogRedaction.install()
 
     children = [
       {Feather.Storage, []},

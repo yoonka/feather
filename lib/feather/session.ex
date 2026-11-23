@@ -34,10 +34,6 @@ defmodule Feather.Session do
     {:ok, banner, state}
   end
 
-  def handle_EHLO(domain, extensions, {:ok, state}) do
-    handle_EHLO(domain, extensions, state)
-  end
-
   @impl true
   def handle_EHLO(domain, extensions, state) do
     opts = state.opts || %{}
@@ -102,10 +98,6 @@ defmodule Feather.Session do
     end
   end
 
-  def handle_HELO(domain, {:ok, state}) do
-    handle_HELO(domain, state)
-  end
-
   @impl true
   def handle_HELO(domain, state) do
     state = %{state | meta: Map.put(state.meta, :helo, domain)} |> Map.put(:esmtp?, false)
@@ -115,10 +107,6 @@ defmodule Feather.Session do
       {:ok, new_state} -> {:ok, %{new_state | mail_from?: false}}
       error -> error
     end
-  end
-
-  def handle_AUTH(type, username, password, {:ok, state}) do
-    handle_AUTH(type, username, password, state)
   end
 
   @impl true
@@ -134,10 +122,6 @@ defmodule Feather.Session do
     end
   end
 
-  def handle_MAIL(from, {:ok, state}) do
-    handle_MAIL(from, state)
-  end
-
   @impl true
   def handle_MAIL(from, state) do
     case step(:mail, from, state) do
@@ -149,10 +133,6 @@ defmodule Feather.Session do
   @impl :gen_smtp_server_session
   def handle_MAIL_extension(_extension, _state) do
     :error
-  end
-
-  def handle_RCPT(to, {:ok, state}) do
-    handle_RCPT(to, state)
   end
 
   @impl true
@@ -277,13 +257,18 @@ defmodule Feather.Session do
     })
   end
 
+  # gen_smtp stores the return value of handle_RSET/1 and handle_STARTTLS/1
+  # as the callback state as is, unlike the other callbacks, which return
+  # {:ok, ...}. Both must therefore return the bare state: a wrapped one made
+  # the next callback that matched on the map crash the session, and that
+  # crash report printed the full session state to the log.
   @impl true
-  def handle_RSET(state), do: {:ok, %{state | mail_from?: false}}
+  def handle_RSET(state), do: %{state | mail_from?: false}
 
   @impl true
   def handle_STARTTLS(state) do
     # Mark TLS as active in state to control AUTH advertisement
-    {:ok, Map.put(state, :tls_active, true)}
+    Map.put(state, :tls_active, true)
   end
 
   @impl true

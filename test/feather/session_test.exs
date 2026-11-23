@@ -68,7 +68,7 @@ defmodule Feather.SessionTest do
 
     test "RSET clears the MAIL FROM marker so a following RCPT is rejected" do
       {:ok, state} = Session.handle_MAIL("sender@mta.test", new_state())
-      {:ok, state} = Session.handle_RSET(state)
+      state = Session.handle_RSET(state)
 
       refute state.mail_from?
       assert {:error, reply, _state} = Session.handle_RCPT("rcpt@mta.test", state)
