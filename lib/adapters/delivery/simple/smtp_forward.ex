@@ -76,6 +76,7 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
         |> Keyword.put_new_lazy(:tls_options, fn ->
           [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
         end)
+        |> Feather.Secret.wrap_opts()
     }
   end
 
@@ -86,7 +87,7 @@ defmodule FeatherAdapters.Delivery.SMTPForward do
       port: opts[:port],
       tls: opts[:tls],
       username: opts[:username] && to_charlist(opts[:username]),
-      password: opts[:password] && to_charlist(opts[:password]),
+      password: opts[:password] && opts[:password] |> Feather.Secret.reveal() |> to_charlist(),
       auth: if(opts[:username] && opts[:password], do: :always, else: :never),
       tls_options: opts[:tls_options]
     ]

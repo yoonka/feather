@@ -46,7 +46,8 @@ end
       @transformable true
 
       defp merge_transformers(state, opts) do
-        transformers = Keyword.get(opts, :transformers, [])
+        # Transformer options can hold secrets (DKIMSigner's passphrase).
+        transformers = opts |> Keyword.get(:transformers, []) |> Feather.Secret.wrap_specs()
         Map.put(state, :transformers, transformers)
       end
 

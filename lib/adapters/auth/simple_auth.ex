@@ -61,7 +61,8 @@ defmodule FeatherAdapters.Auth.SimpleAuth do
   @impl true
   @spec init_session(keyword()) :: state()
   def init_session(opts) do
-    users = Keyword.fetch!(opts, :users)
+    # Plaintext passwords: kept out of anything that prints the state.
+    users = opts |> Keyword.fetch!(:users) |> Feather.Secret.wrap()
     %{users: users}
   end
 
@@ -76,7 +77,7 @@ defmodule FeatherAdapters.Auth.SimpleAuth do
   @spec auth({String.t(), String.t()}, map(), state()) ::
           {:ok, map(), state()} | {:halt, :invalid_credentials, state()}
   def auth({username, password}, meta, %{users: users} = state) do
-    case Map.fetch(users, username) do
+    case users |> Feather.Secret.reveal() |> Map.fetch(username) do
       {:ok, ^password} ->
         updated_meta =
           meta

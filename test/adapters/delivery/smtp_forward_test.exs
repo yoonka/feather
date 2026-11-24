@@ -17,7 +17,14 @@ defmodule FeatherAdapters.Delivery.SMTPForwardTest do
     def handle_HELO(_domain, state), do: {:ok, 655_360, state}
 
     @impl true
-    def handle_EHLO(_domain, extensions, state), do: {:ok, extensions, state}
+    def handle_EHLO(_domain, extensions, state),
+      do: {:ok, [{~c"AUTH", ~c"PLAIN LOGIN"} | extensions], state}
+
+    @impl true
+    def handle_AUTH(_type, username, password, test) do
+      send(test, {:auth, username, password})
+      {:ok, test}
+    end
 
     @impl true
     def handle_MAIL(_from, state), do: {:ok, state}
@@ -77,11 +84,26 @@ defmodule FeatherAdapters.Delivery.SMTPForwardTest do
     on_exit(fn -> :gen_smtp_server.stop(name) end)
 
     state = SMTPForward.init_session(server: "127.0.0.1", port: port, tls: :never)
-    {:ok, state: state}
+    {:ok, state: state, port: port}
   end
 
   defp deliver(rcpts, state),
     do: SMTPForward.deliver(@raw, %{from: "a@sender.test", to: rcpts}, state)
+
+  test "logs in to the relay with the configured credentials", %{port: port} do
+    # The password is kept wrapped in the session state (Feather.Secret).
+    state =
+      SMTPForward.init_session(
+        server: "127.0.0.1",
+        port: port,
+        tls: :never,
+        username: "relay-user",
+        password: "relay-password"
+      )
+
+    assert {:ok, _meta, _state} = deliver(["ok@ok.test"], state)
+    assert_received {:auth, "relay-user", "relay-password"}
+  end
 
   test "any 250 reply to DATA is a success, whatever its text", %{state: state} do
     assert {:ok, _meta, _state} = deliver(["ok@ok.test"], state)

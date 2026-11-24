@@ -87,7 +87,7 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
 
   @type state :: %{
           issuer: String.t(),
-          service_pat: String.t(),
+          service_pat: Feather.Secret.t(),
           project_id: String.t(),
           required_scope: String.t() | nil,
           require_email_verified: boolean()
@@ -96,7 +96,7 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
   @impl true
   def init_session(opts) do
     issuer = opts |> Keyword.fetch!(:issuer) |> String.trim_trailing("/")
-    service_pat = Keyword.fetch!(opts, :service_pat)
+    service_pat = opts |> Keyword.fetch!(:service_pat) |> Feather.Secret.wrap()
     project_id = Keyword.fetch!(opts, :project_id)
     required_scope = Keyword.get(opts, :required_scope, "mail.access")
     require_email_verified = Keyword.get(opts, :require_email_verified, true)
@@ -175,7 +175,7 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
 
     case Req.post(state.issuer <> "/v2/users",
            json: body,
-           auth: {:bearer, state.service_pat},
+           auth: bearer(state),
            retry: false
          ) do
       {:ok, %Req.Response{status: 200, body: %{"result" => [%{"userId" => uid} = u | _]}}} ->
@@ -208,7 +208,7 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
 
     case Req.post(state.issuer <> "/v2/sessions",
            json: body,
-           auth: {:bearer, state.service_pat},
+           auth: bearer(state),
            retry: false
          ) do
       {:ok, %Req.Response{status: 201, body: resp}} ->
@@ -275,7 +275,7 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
 
     case Req.post(state.issuer <> "/management/v1/users/grants/_search",
            json: body,
-           auth: {:bearer, state.service_pat},
+           auth: bearer(state),
            retry: false
          ) do
       {:ok, %Req.Response{status: 200, body: %{"result" => grants}}} when is_list(grants) ->
@@ -307,4 +307,6 @@ defmodule FeatherAdapters.Auth.ZitadelIdP do
   end
 
   defp check_email_verified(:unknown, _, _), do: {:error, :invalid_credentials}
+
+  defp bearer(state), do: {:bearer, Feather.Secret.reveal(state.service_pat)}
 end

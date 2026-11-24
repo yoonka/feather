@@ -61,7 +61,7 @@ defmodule FeatherAdapters.Access.BackscatterGuard.Zitadel do
 
   def valid_recipient?(address, opts) do
     issuer = opts |> Keyword.fetch!(:issuer) |> String.trim_trailing("/")
-    service_pat = Keyword.fetch!(opts, :service_pat)
+    service_pat = opts |> Keyword.fetch!(:service_pat) |> Feather.Secret.reveal()
     required_scope = Keyword.get(opts, :required_scope, "mail.access")
     domains = opts |> Keyword.get(:domains) |> normalize_domains()
 
