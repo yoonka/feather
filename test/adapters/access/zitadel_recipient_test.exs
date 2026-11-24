@@ -14,7 +14,7 @@ defmodule FeatherAdapters.Access.ZitadelRecipientTest do
 
       # trailing slash on the issuer is stripped so URL joins don't double up
       assert state.issuer == "https://auth.yoonka.com"
-      assert state.service_pat == "pat"
+      assert Feather.Secret.reveal(state.service_pat) == "pat"
       assert state.project_id == "123"
       assert state.required_scope == "mail.access"
     end

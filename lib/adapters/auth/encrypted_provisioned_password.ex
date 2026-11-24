@@ -116,17 +116,19 @@ defmodule FeatherAdapters.Auth.EncryptedProvisionedPassword do
 
     users = File.read!(keystore_path) |> Jason.decode!()
 
+    # The encryption key and the password hashes are kept out of anything
+    # that prints the state.
     %{
-      users: users,
-      key: encryption_key,
+      users: Feather.Secret.wrap(users),
+      key: Feather.Secret.wrap(encryption_key),
       keystore_path: keystore_path
     }
   end
 
   @impl true
   def auth({username, encrypted_blob}, meta, %{users: users, key: key} = state) do
-    with %{"hashed_password" => hash} <- Map.get(users, username),
-         {:ok, password} <- decrypt(encrypted_blob, key),
+    with %{"hashed_password" => hash} <- users |> Feather.Secret.reveal() |> Map.get(username),
+         {:ok, password} <- decrypt(encrypted_blob, Feather.Secret.reveal(key)),
          true <- Bcrypt.verify_pass(password, hash) do
       updated_meta =
         meta

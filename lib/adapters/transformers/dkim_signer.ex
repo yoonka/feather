@@ -43,7 +43,7 @@ defmodule FeatherAdapters.Transformers.DKIMSigner do
     domain    = Keyword.fetch!(opts, :domain)
     key_path  = Keyword.fetch!(opts, :private_key)
     algorithm = Keyword.get(opts, :algorithm, :rsa_sha256)
-    encrypted = Keyword.get(opts, :encrypted)
+    encrypted = opts |> Keyword.get(:encrypted) |> Feather.Secret.reveal()
 
     with {:ok, pem} <- File.read(key_path) do
       dkim_opts = build_dkim_opts(selector, domain, pem, algorithm, encrypted)

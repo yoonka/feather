@@ -48,7 +48,7 @@ defmodule FeatherAdapters.Access.ZitadelRecipient do
   def init_session(opts) do
     %{
       issuer: opts |> Keyword.fetch!(:issuer) |> String.trim_trailing("/"),
-      service_pat: Keyword.fetch!(opts, :service_pat),
+      service_pat: opts |> Keyword.fetch!(:service_pat) |> Feather.Secret.wrap(),
       project_id: Keyword.fetch!(opts, :project_id),
       required_scope: Keyword.get(opts, :required_scope, "mail.access")
     }
@@ -100,7 +100,7 @@ defmodule FeatherAdapters.Access.ZitadelRecipient do
 
     case Req.post(state.issuer <> "/v2/users",
            json: body,
-           auth: {:bearer, state.service_pat},
+           auth: bearer(state),
            retry: false
          ) do
       {:ok, %Req.Response{status: 200, body: %{"result" => [%{"userId" => uid} | _]}}} ->
@@ -132,7 +132,7 @@ defmodule FeatherAdapters.Access.ZitadelRecipient do
 
     case Req.post(state.issuer <> "/management/v1/users/grants/_search",
            json: body,
-           auth: {:bearer, state.service_pat},
+           auth: bearer(state),
            retry: false
          ) do
       {:ok, %Req.Response{status: 200, body: %{"result" => grants}}} when is_list(grants) ->
@@ -151,4 +151,6 @@ defmodule FeatherAdapters.Access.ZitadelRecipient do
         {:error, {:zitadel_failed, reason}}
     end
   end
+
+  defp bearer(state), do: {:bearer, Feather.Secret.reveal(state.service_pat)}
 end

@@ -68,7 +68,8 @@ defmodule FeatherAdapters.Access.BackscatterGuard do
 
   @impl true
   def init_session(opts) do
-    guards = Keyword.get(opts, :guards, [])
+    # Guard options can hold secrets (the Zitadel guard's service PAT).
+    guards = opts |> Keyword.get(:guards, []) |> Feather.Secret.wrap_specs()
     mode = Keyword.get(opts, :mode, :strict)
     %{guards: guards, mode: mode}
   end

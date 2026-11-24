@@ -23,7 +23,8 @@ defmodule FeatherAdapters.SpamFilters.Pipeline do
         %{}
       end
 
-    %{filter: filter_state, opts: opts, module: module}
+    # The options can hold secrets (Rspamd's password).
+    %{filter: filter_state, opts: Feather.Secret.wrap_opts(opts), module: module}
   end
 
   @doc false

@@ -63,7 +63,7 @@ defmodule FeatherAdapters.SpamFilters.Rspamd do
   def init_filter(opts) do
     %{
       url: Keyword.get(opts, :url, @default_url),
-      password: Keyword.get(opts, :password),
+      password: opts |> Keyword.get(:password) |> Feather.Secret.wrap(),
       timeout: Keyword.get(opts, :timeout, @default_timeout),
       req_options: Keyword.get(opts, :req_options, [])
     }
@@ -71,7 +71,7 @@ defmodule FeatherAdapters.SpamFilters.Rspamd do
 
   @impl true
   def classify_data(rfc822, meta, state) do
-    headers = build_headers(meta, state.password)
+    headers = build_headers(meta, Feather.Secret.reveal(state.password))
 
     base = [
       url: state.url <> "/checkv2",
